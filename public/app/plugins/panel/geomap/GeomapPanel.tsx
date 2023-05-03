@@ -11,7 +11,7 @@ import { fromLonLat, toLonLat } from 'ol/proj';
 import React, { Component, ReactNode } from 'react';
 import { Subscription } from 'rxjs';
 
-import { DataHoverEvent, PanelData, PanelProps } from '@grafana/data';
+import { DataHoverEvent, InterpolateFunction, PanelData, PanelProps } from '@grafana/data';
 import { config, locationService } from '@grafana/runtime';
 import { PanelContext, PanelContextRoot } from '@grafana/ui';
 import { PanelEditExitedEvent } from 'app/types/events';
@@ -73,50 +73,47 @@ export class GeomapPanel extends Component<Props, State> {
     );
   }
 
-  updatePanelVars(map: OpenLayersMap) {
+  updateDashboardVariables(map: OpenLayersMap, replaceVariables: InterpolateFunction) {
+    if (!map) {
+      return;
+    }
+
     const extent = map.getView().calculateExtent(map.getSize());
     const topLeft = toLonLat(getTopLeft(extent));
     const bottomRight = toLonLat(getBottomRight(extent));
     const zoom = Number(map.getView().getZoom());
 
-    const top = topLeft[1];
-    const left = topLeft[0];
-    const bottom = bottomRight[1];
-    const right = bottomRight[0];
+    // let searchObject = locationService.getSearchObject();
+    // let zpf = Number(searchObject['var-zpf'])?Number(searchObject['var-zpf']):0.5;
+    let zpf = Number(replaceVariables('$zpf')) ? Number(replaceVariables('$zpf')) : 0.5;
+    let precision = Math.max(Math.min(zoom * zpf, 12), 1);
 
-    console.log(top);
-    console.log(left);
-    console.log(bottom);
-    console.log(right);
-    let so = locationService.getSearchObject();
-    let zp = Number(so['var-zpf']);
-    zp = zp ? zp : 1;
-    let precision = Math.round(Math.max(Math.min(zoom * zp, 12), 1));
-    locationService.partial({ 'var-top': top.toFixed(2) }, true);
-    locationService.partial({ 'var-left': left.toFixed(2) }, true);
-    locationService.partial({ 'var-right': right.toFixed(2) }, true);
-    locationService.partial({ 'var-bottom': bottom.toFixed(2) }, true);
-    locationService.partial({ 'var-zpf': zp }, true);
-    locationService.partial({ 'var-precision': precision }, true);
+    locationService.partial({ 'var-top': topLeft[1].toFixed(4) }, true);
+    locationService.partial({ 'var-left': topLeft[0].toFixed(4) }, true);
+    locationService.partial({ 'var-right': bottomRight[0].toFixed(4) }, true);
+    locationService.partial({ 'var-bottom': bottomRight[1].toFixed(4) }, true);
+    locationService.partial({ 'var-precision': precision.toFixed(0) }, true);
+    locationService.partial({ 'var-zpf': zpf }, true);
   }
 
-  addZoomHandler() {
+  addViewMovedListener() {
     if (!this.map) {
       return;
     }
-    let map = this.map;
-    let view = map.getView();
-    let upv = this.updatePanelVars;
-    upv(map);
 
-    let currZoom = view.getZoom();
-    let currCenter = view.getCenter();
-    map.on('moveend', function (e) {
-      let newZoom = map.getView().getZoom();
-      let newCenter = map.getView().getCenter();
-      if (currZoom !== newZoom || currCenter !== newCenter) {
-        upv(map);
-        currZoom = newZoom;
+    let rV = this.props.replaceVariables;
+    let upv = this.updateDashboardVariables;
+    upv(this.map, rV);
+
+    let oldZoom = this.map.getView().getZoom();
+    let oldCenter = this.map.getView().getCenter();
+    this.map.on('moveend', function (e) {
+      let zoom = e.map.getView().getZoom();
+      let center = e.map.getView().getCenter();
+      if (oldZoom !== zoom || oldCenter !== center) {
+        upv(e.map, rV);
+        oldZoom = zoom;
+        oldCenter = center;
       }
     });
   }
@@ -142,7 +139,6 @@ export class GeomapPanel extends Component<Props, State> {
     // Check for resize
     if (this.props.height !== nextProps.height || this.props.width !== nextProps.width) {
       this.map.updateSize();
-      this.updatePanelVars(this.map);
     }
 
     // External data changed
@@ -279,7 +275,7 @@ export class GeomapPanel extends Component<Props, State> {
     notifyPanelEditor(this, layers, layers.length - 1);
 
     this.setState({ legends: this.getLegends() });
-    this.addZoomHandler();
+    this.addViewMovedListener();
   };
 
   clearTooltip = () => {
