@@ -88,10 +88,10 @@ export class GeomapPanel extends Component<Props, State> {
     let zpf = Number(replaceVariables('$zpf')) ? Number(replaceVariables('$zpf')) : 0.5;
     let precision = Math.max(Math.min(zoom * zpf, 12), 1);
 
-    locationService.partial({ 'var-top': topLeft[1].toFixed(4) }, true);
-    locationService.partial({ 'var-left': topLeft[0].toFixed(4) }, true);
-    locationService.partial({ 'var-right': bottomRight[0].toFixed(4) }, true);
-    locationService.partial({ 'var-bottom': bottomRight[1].toFixed(4) }, true);
+    locationService.partial({ 'var-top': topLeft[1].toFixed(6) }, true);
+    locationService.partial({ 'var-left': topLeft[0].toFixed(6) }, true);
+    locationService.partial({ 'var-right': bottomRight[0].toFixed(6) }, true);
+    locationService.partial({ 'var-bottom': bottomRight[1].toFixed(6) }, true);
     locationService.partial({ 'var-precision': precision.toFixed(0) }, true);
     locationService.partial({ 'var-zpf': zpf }, true);
   }
