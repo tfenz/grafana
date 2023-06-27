@@ -1,10 +1,10 @@
 {
   "type": "panel",
-  "name": "Geomap",
+  "name": "Geomap + Oebb BoundingBox Exposure",
   "id": "geomap",
 
   "info": {
-    "description": "Geomap panel",
+    "description": "Geomap panel - extension: Export the coordinates of the bounding box of the current view to dashboard variables",
     "author": {
       "name": "Grafana Labs",
       "url": "https://grafana.com"
