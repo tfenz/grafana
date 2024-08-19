@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -15,10 +16,10 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
 	"github.com/grafana/grafana/pkg/expr"
 	"github.com/grafana/grafana/pkg/expr/classic"
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/plugins"
 	"github.com/grafana/grafana/pkg/services/datasources"
 	"github.com/grafana/grafana/pkg/services/ngalert/models"
 	"github.com/grafana/grafana/pkg/setting"
@@ -27,8 +28,6 @@ import (
 var logger = log.New("ngalert.eval")
 
 type EvaluatorFactory interface {
-	// Validate validates that the condition is correct. Returns nil if the condition is correct. Otherwise, error that describes the failure
-	Validate(ctx EvaluationContext, condition models.Condition) error
 	// Create builds an evaluator pipeline ready to evaluate a rule's query
 	Create(ctx EvaluationContext, condition models.Condition) (ConditionEvaluator, error)
 }
@@ -41,21 +40,27 @@ type ConditionEvaluator interface {
 	Evaluate(ctx context.Context, now time.Time) (Results, error)
 }
 
-type expressionService interface {
+type expressionExecutor interface {
 	ExecutePipeline(ctx context.Context, now time.Time, pipeline expr.DataPipeline) (*backend.QueryDataResponse, error)
+}
+
+type expressionBuilder interface {
+	expressionExecutor
+	BuildPipeline(req *expr.Request) (expr.DataPipeline, error)
 }
 
 type conditionEvaluator struct {
 	pipeline          expr.DataPipeline
-	expressionService expressionService
+	expressionService expressionExecutor
 	condition         models.Condition
 	evalTimeout       time.Duration
+	evalResultLimit   int
 }
 
 func (r *conditionEvaluator) EvaluateRaw(ctx context.Context, now time.Time) (resp *backend.QueryDataResponse, err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			logger.FromContext(ctx).Error("alert rule panic", "error", e, "stack", string(debug.Stack()))
+			logger.FromContext(ctx).Error("Alert rule panic", "error", e, "stack", string(debug.Stack()))
 			panicErr := fmt.Errorf("alert rule panic; please check the logs for the full stack")
 			if err != nil {
 				err = fmt.Errorf("queries and expressions execution failed: %w; %v", err, panicErr.Error())
@@ -71,7 +76,22 @@ func (r *conditionEvaluator) EvaluateRaw(ctx context.Context, now time.Time) (re
 		defer cancel()
 		execCtx = timeoutCtx
 	}
-	return r.expressionService.ExecutePipeline(execCtx, now, r.pipeline)
+	logger.FromContext(ctx).Debug("Executing pipeline", "commands", strings.Join(r.pipeline.GetCommandTypes(), ","), "datasources", strings.Join(r.pipeline.GetDatasourceTypes(), ","))
+	result, err := r.expressionService.ExecutePipeline(execCtx, now, r.pipeline)
+
+	// Check if the result of the condition evaluation is too large
+	if err == nil && result != nil && r.evalResultLimit > 0 {
+		conditionResultLength := 0
+		if conditionResponse, ok := result.Responses[r.condition.Condition]; ok {
+			conditionResultLength = len(conditionResponse.Frames)
+		}
+		if conditionResultLength > r.evalResultLimit {
+			logger.FromContext(ctx).Error("Query evaluation returned too many results", "limit", r.evalResultLimit, "actual", conditionResultLength)
+			return nil, fmt.Errorf("query evaluation returned too many results: %d (limit: %d)", conditionResultLength, r.evalResultLimit)
+		}
+	}
+
+	return result, err
 }
 
 // Evaluate evaluates the condition and converts the response to Results
@@ -80,29 +100,33 @@ func (r *conditionEvaluator) Evaluate(ctx context.Context, now time.Time) (Resul
 	if err != nil {
 		return nil, err
 	}
-	execResults := queryDataResponseToExecutionResults(r.condition, response)
-	return evaluateExecutionResult(execResults, now), nil
+	return EvaluateAlert(response, r.condition, now), nil
 }
 
 type evaluatorImpl struct {
-	evaluationTimeout time.Duration
-	dataSourceCache   datasources.CacheService
-	expressionService *expr.Service
-	pluginsStore      plugins.Store
+	evaluationTimeout     time.Duration
+	evaluationResultLimit int
+	dataSourceCache       datasources.CacheService
+	expressionService     expressionBuilder
 }
 
 func NewEvaluatorFactory(
 	cfg setting.UnifiedAlertingSettings,
 	datasourceCache datasources.CacheService,
 	expressionService *expr.Service,
-	pluginsStore plugins.Store,
 ) EvaluatorFactory {
 	return &evaluatorImpl{
-		evaluationTimeout: cfg.EvaluationTimeout,
-		dataSourceCache:   datasourceCache,
-		expressionService: expressionService,
-		pluginsStore:      pluginsStore,
+		evaluationTimeout:     cfg.EvaluationTimeout,
+		evaluationResultLimit: cfg.EvaluationResultLimit,
+		dataSourceCache:       datasourceCache,
+		expressionService:     expressionService,
 	}
+}
+
+// EvaluateAlert takes the results of an executed query and evaluates it as an alert rule, returning alert states that the query produces.
+func EvaluateAlert(queryResponse *backend.QueryDataResponse, condition models.Condition, now time.Time) Results {
+	execResults := queryDataResponseToExecutionResults(condition, queryResponse)
+	return evaluateExecutionResult(execResults, now)
 }
 
 // invalidEvalResultFormatError is an error for invalid format of the alert definition evaluation results.
@@ -152,6 +176,35 @@ func (evalResults Results) HasErrors() bool {
 	return false
 }
 
+// HasNonRetryableErrors returns true if we have at least 1 result with:
+// 1. A `State` of `Error`
+// 2. The `Error` attribute is not nil
+// 3. The `Error` matches IsNonRetryableError
+// Our thinking with this approach, is that we don't want to retry errors that have relation with invalid alert definition format.
+func (evalResults Results) HasNonRetryableErrors() bool {
+	for _, r := range evalResults {
+		if r.State == Error && r.Error != nil {
+			if IsNonRetryableError(r.Error) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsNonRetryableError indicates whether an error is considered persistent and not worth performing evaluation retries.
+// Currently it is true if err is `&invalidEvalResultFormatError` or `ErrSeriesMustBeWide`
+func IsNonRetryableError(err error) bool {
+	var nonRetryableError *invalidEvalResultFormatError
+	if errors.As(err, &nonRetryableError) {
+		return true
+	}
+	if errors.Is(err, expr.ErrSeriesMustBeWide) {
+		return true
+	}
+	return false
+}
+
 // HasErrors returns true when Results contains at least one element and all elements are errors
 func (evalResults Results) IsError() bool {
 	for _, r := range evalResults {
@@ -170,6 +223,18 @@ func (evalResults Results) IsNoData() bool {
 		}
 	}
 	return true
+}
+
+// Error returns the aggregated `error` of all results of which state is `Error`.
+func (evalResults Results) Error() error {
+	var errs []error
+	for _, result := range evalResults {
+		if result.State == Error && result.Error != nil {
+			errs = append(errs, result.Error)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // Result contains the evaluated State of an alert instance
@@ -241,22 +306,43 @@ func (s State) String() string {
 	return [...]string{"Normal", "Alerting", "Pending", "NoData", "Error"}[s]
 }
 
-func buildDatasourceHeaders(ctx context.Context) map[string]string {
-	headers := map[string]string{
-		// Many data sources check this in query method as sometimes alerting needs special considerations.
-		// Several existing systems also compare against the value of this header. Altering this constitutes a breaking change.
-		//
-		// Note: The spelling of this headers is intentionally degenerate from the others for compatibility reasons.
-		// When sent over a network, the key of this header is canonicalized to "Fromalert".
-		// However, some datasources still compare against the string "FromAlert".
-		models.FromAlertHeaderName: "true",
-
-		models.CacheSkipHeaderName: "true",
+func ParseStateString(repr string) (State, error) {
+	switch strings.ToLower(repr) {
+	case "normal":
+		return Normal, nil
+	case "alerting":
+		return Alerting, nil
+	case "pending":
+		return Pending, nil
+	case "nodata":
+		return NoData, nil
+	case "error":
+		return Error, nil
+	default:
+		return -1, fmt.Errorf("invalid state: %s", repr)
 	}
+}
+
+func buildDatasourceHeaders(ctx context.Context, metadata map[string]string) map[string]string {
+	headers := make(map[string]string, len(metadata)+3)
+
+	if len(metadata) > 0 {
+		for key, value := range metadata {
+			headers[fmt.Sprintf("http_X-Rule-%s", key)] = url.QueryEscape(value)
+		}
+	}
+
+	// Many data sources check this in query method as sometimes alerting needs special considerations.
+	// Several existing systems also compare against the value of this header. Altering this constitutes a breaking change.
+	//
+	// Note: The spelling of this headers is intentionally degenerate from the others for compatibility reasons.
+	// When sent over a network, the key of this header is canonicalized to "Fromalert".
+	// However, some datasources still compare against the string "FromAlert".
+	headers[models.FromAlertHeaderName] = "true"
+	headers[models.CacheSkipHeaderName] = "true"
 
 	key, ok := models.RuleKeyFromContext(ctx)
 	if ok {
-		headers["X-Rule-Uid"] = key.UID
 		headers["X-Grafana-Org-Id"] = strconv.FormatInt(key.OrgID, 10)
 	}
 
@@ -264,30 +350,16 @@ func buildDatasourceHeaders(ctx context.Context) map[string]string {
 }
 
 // getExprRequest validates the condition, gets the datasource information and creates an expr.Request from it.
-func getExprRequest(ctx EvaluationContext, data []models.AlertQuery, dsCacheService datasources.CacheService) (*expr.Request, error) {
+func getExprRequest(ctx EvaluationContext, condition models.Condition, dsCacheService datasources.CacheService, reader AlertingResultsReader) (*expr.Request, error) {
 	req := &expr.Request{
-		OrgId:   ctx.User.OrgID,
-		Headers: buildDatasourceHeaders(ctx.Ctx),
+		OrgId:   ctx.User.GetOrgID(),
+		Headers: buildDatasourceHeaders(ctx.Ctx, condition.Metadata),
 		User:    ctx.User,
 	}
+	datasources := make(map[string]*datasources.DataSource, len(condition.Data))
 
-	datasources := make(map[string]*datasources.DataSource, len(data))
-
-	for _, q := range data {
-		model, err := q.GetModel()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get query model from '%s': %w", q.RefID, err)
-		}
-		interval, err := q.GetIntervalDuration()
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve intervalMs from '%s': %w", q.RefID, err)
-		}
-
-		maxDatapoints, err := q.GetMaxDatapoints()
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve maxDatapoints from '%s': %w", q.RefID, err)
-		}
-
+	for _, q := range condition.Data {
+		var err error
 		ds, ok := datasources[q.DatasourceUID]
 		if !ok {
 			switch nodeType := expr.NodeTypeFromDatasourceUID(q.DatasourceUID); nodeType {
@@ -300,6 +372,46 @@ func getExprRequest(ctx EvaluationContext, data []models.AlertQuery, dsCacheServ
 				return nil, fmt.Errorf("failed to build query '%s': %w", q.RefID, err)
 			}
 			datasources[q.DatasourceUID] = ds
+		}
+
+		// TODO rewrite the code below and remove the mutable component from AlertQuery
+
+		// if the query is command expression and it's a hysteresis, patch it with the current state
+		// it's important to do this before GetModel
+		if ds.Type == expr.DatasourceType {
+			isHysteresis, err := q.IsHysteresisExpression()
+			if err != nil {
+				return nil, fmt.Errorf("failed to build query '%s': %w", q.RefID, err)
+			}
+			if isHysteresis {
+				// make sure we allow hysteresis expressions to be specified only as the alert condition.
+				// This guarantees us that the AlertResultsReader can be correctly applied to the expression tree.
+				if q.RefID != condition.Condition {
+					return nil, fmt.Errorf("recovery threshold '%s' is only allowed to be the alert condition", q.RefID)
+				}
+				if reader != nil {
+					active := reader.Read()
+					logger.FromContext(ctx.Ctx).Debug("Detected hysteresis threshold command. Populating with the results", "items", len(active))
+					err = q.PatchHysteresisExpression(active)
+					if err != nil {
+						return nil, fmt.Errorf("failed to amend hysteresis command '%s': %w", q.RefID, err)
+					}
+				}
+			}
+		}
+
+		model, err := q.GetModel()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get query model from '%s': %w", q.RefID, err)
+		}
+		interval, err := q.GetIntervalDuration()
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve intervalMs from '%s': %w", q.RefID, err)
+		}
+
+		maxDatapoints, err := q.GetMaxDatapoints()
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve maxDatapoints from '%s': %w", q.RefID, err)
 		}
 
 		req.Queries = append(req.Queries, expr.Query{
@@ -320,6 +432,24 @@ type NumberValueCapture struct {
 	Labels data.Labels
 
 	Value *float64
+}
+
+func IsNoData(res backend.DataResponse) bool {
+	// There are two possible frame formats for No Data:
+	//
+	// 1. A response with no frames
+	// 2. A response with 1 frame but no fields
+	//
+	// The first format is not documented in the data plane contract but needs to be
+	// supported for older datasource plugins. The second format is documented in
+	// https://github.com/grafana/grafana-plugin-sdk-go/blob/main/data/contract_docs/contract.md
+	// and is what datasource plugins should use going forward.
+	if len(res.Frames) <= 1 {
+		hasNoFrames := len(res.Frames) == 0
+		hasNoFields := len(res.Frames) == 1 && len(res.Frames[0].Fields) == 0
+		return hasNoFrames || hasNoFields
+	}
+	return false
 }
 
 func queryDataResponseToExecutionResults(c models.Condition, execResp *backend.QueryDataResponse) ExecutionResults {
@@ -347,28 +477,18 @@ func queryDataResponseToExecutionResults(c models.Condition, execResp *backend.Q
 	}
 
 	result := ExecutionResults{Results: make(map[string]data.Frames)}
+
+	result.Error = FindConditionError(execResp, c.Condition)
+
 	for refID, res := range execResp.Responses {
-		// There are two possible frame formats for No Data:
-		//
-		// 1. A response with no frames
-		// 2. A response with 1 frame but no fields
-		//
-		// The first format is not documented in the data plane contract but needs to be
-		// supported for older datasource plugins. The second format is documented in
-		// https://github.com/grafana/grafana-plugin-sdk-go/blob/main/data/contract_docs/contract.md
-		// and is what datasource plugins should use going forward.
-		if len(res.Frames) <= 1 {
+		if IsNoData(res) {
 			// To make sure NoData is nil when Results are also nil we wait to initialize
 			// NoData until there is at least one query or expression that returned no data
 			if result.NoData == nil {
 				result.NoData = make(map[string]string)
 			}
-			hasNoFrames := len(res.Frames) == 0
-			hasNoFields := len(res.Frames) == 1 && len(res.Frames[0].Fields) == 0
-			if hasNoFrames || hasNoFields {
-				if s, ok := datasourceUIDsForRefIDs[refID]; ok && expr.NodeTypeFromDatasourceUID(s) == expr.TypeDatasourceNode { // TODO perhaps extract datasource UID from ML expression too.
-					result.NoData[refID] = s
-				}
+			if s, ok := datasourceUIDsForRefIDs[refID]; ok && expr.NodeTypeFromDatasourceUID(s) == expr.TypeDatasourceNode { // TODO perhaps extract datasource UID from ML expression too.
+				result.NoData[refID] = s
 			}
 		}
 
@@ -431,6 +551,49 @@ func queryDataResponseToExecutionResults(c models.Condition, execResp *backend.Q
 	}
 
 	return result
+}
+
+// FindConditionError extracts the error from a query response that caused the given condition to fail.
+// If a condition failed because a node it depends on had an error, that error is returned instead.
+// It returns nil if there are no errors related to the condition.
+func FindConditionError(resp *backend.QueryDataResponse, condition string) error {
+	if resp == nil {
+		return nil
+	}
+
+	errs := make(map[string]error)
+	for refID, node := range resp.Responses {
+		if node.Error != nil {
+			errs[refID] = node.Error
+		}
+	}
+
+	conditionErr := errs[condition]
+
+	// If the error of the condition is an Error that indicates the condition failed
+	// because one of its dependent query or expressions failed, then we follow
+	// the dependency chain to an error that is not a dependency error.
+	if conditionErr != nil {
+		if errors.Is(conditionErr, expr.DependencyError) {
+			var utilError errutil.Error
+			e := conditionErr
+			for {
+				errors.As(e, &utilError)
+				depRefID := utilError.PublicPayload["depRefId"].(string)
+				depError, ok := errs[depRefID]
+				if !ok {
+					return conditionErr
+				}
+				if !errors.Is(depError, expr.DependencyError) {
+					conditionErr = depError
+					return conditionErr
+				}
+				e = depError
+			}
+		}
+	}
+
+	return conditionErr
 }
 
 // datasourceUIDsToRefIDs returns a sorted slice of Ref IDs for each Datasource UID.
@@ -655,36 +818,6 @@ func (evalResults Results) AsDataFrame() data.Frame {
 	return *frame
 }
 
-func (e *evaluatorImpl) Validate(ctx EvaluationContext, condition models.Condition) error {
-	req, err := getExprRequest(ctx, condition.Data, e.dataSourceCache)
-	if err != nil {
-		return err
-	}
-	for _, query := range req.Queries {
-		if query.DataSource == nil {
-			continue
-		}
-		switch expr.NodeTypeFromDatasourceUID(query.DataSource.UID) {
-		case expr.TypeDatasourceNode:
-			p, found := e.pluginsStore.Plugin(ctx.Ctx, query.DataSource.Type)
-			if !found { // technically this should fail earlier during datasource resolution phase.
-				return fmt.Errorf("datasource refID %s could not be found: %w", query.RefID, plugins.ErrPluginUnavailable)
-			}
-			if !p.Backend {
-				return fmt.Errorf("datasource refID %s is not a backend datasource", query.RefID)
-			}
-		case expr.TypeMLNode:
-			_, found := e.pluginsStore.Plugin(ctx.Ctx, query.DataSource.Type)
-			if !found {
-				return fmt.Errorf("datasource refID %s could not be found: %w", query.RefID, plugins.ErrPluginUnavailable)
-			}
-		case expr.TypeCMDNode:
-		}
-	}
-	_, err = e.create(condition, req)
-	return err
-}
-
 func (e *evaluatorImpl) Create(ctx EvaluationContext, condition models.Condition) (ConditionEvaluator, error) {
 	if len(condition.Data) == 0 {
 		return nil, errors.New("expression list is empty. must be at least 1 expression")
@@ -692,7 +825,7 @@ func (e *evaluatorImpl) Create(ctx EvaluationContext, condition models.Condition
 	if len(condition.Condition) == 0 {
 		return nil, errors.New("condition must not be empty")
 	}
-	req, err := getExprRequest(ctx, condition.Data, e.dataSourceCache)
+	req, err := getExprRequest(ctx, condition, e.dataSourceCache, ctx.AlertingResultsReader)
 	if err != nil {
 		return nil, err
 	}
@@ -712,9 +845,10 @@ func (e *evaluatorImpl) create(condition models.Condition, req *expr.Request) (C
 				expressionService: e.expressionService,
 				condition:         condition,
 				evalTimeout:       e.evaluationTimeout,
+				evalResultLimit:   e.evaluationResultLimit,
 			}, nil
 		}
 		conditions = append(conditions, node.RefID())
 	}
-	return nil, fmt.Errorf("condition %s does not exist, must be one of %v", condition.Condition, conditions)
+	return nil, models.ErrConditionNotExist(condition.Condition, conditions)
 }

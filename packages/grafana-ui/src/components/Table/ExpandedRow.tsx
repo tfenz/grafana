@@ -1,5 +1,6 @@
 import { css } from '@emotion/css';
-import React, { CSSProperties } from 'react';
+import { CSSProperties } from 'react';
+import * as React from 'react';
 
 import { DataFrame, Field, GrafanaTheme2 } from '@grafana/data';
 import { TableCellHeight } from '@grafana/schema';
@@ -19,7 +20,7 @@ export interface Props {
 }
 
 export function ExpandedRow({ tableStyles, nestedData, rowIndex, width, cellHeight }: Props) {
-  const frames = nestedData.values as DataFrame[][];
+  const frames: DataFrame[][] = nestedData.values;
   const subTables: React.ReactNode[] = [];
   const theme = useTheme2();
   const styles = useStyles2(getStyles);
@@ -72,7 +73,7 @@ const getStyles = (theme: GrafanaTheme2) => {
 };
 
 export function getExpandedRowHeight(nestedData: Field, rowIndex: number, tableStyles: TableStyles) {
-  const frames = nestedData.values as DataFrame[][];
+  const frames: DataFrame[][] = nestedData.values;
 
   const height = frames[rowIndex].reduce((acc: number, frame: DataFrame) => {
     if (frame.length) {

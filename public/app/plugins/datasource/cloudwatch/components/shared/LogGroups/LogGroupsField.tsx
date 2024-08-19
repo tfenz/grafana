@@ -1,5 +1,7 @@
 import { css } from '@emotion/css';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+
+import { config } from '@grafana/runtime';
 
 import { CloudWatchDatasource } from '../../../datasource';
 import { useAccountOptions } from '../../../hooks';
@@ -7,11 +9,12 @@ import { DescribeLogGroupsRequest } from '../../../resources/types';
 import { LogGroup } from '../../../types';
 import { isTemplateVariable } from '../../../utils/templateVariableUtils';
 
+import { LegacyLogGroupSelection } from './LegacyLogGroupNamesSelection';
 import { LogGroupsSelector } from './LogGroupsSelector';
 import { SelectedLogGroups } from './SelectedLogGroups';
 
 type Props = {
-  datasource?: CloudWatchDatasource;
+  datasource: CloudWatchDatasource;
   onChange: (logGroups: LogGroup[]) => void;
   legacyLogGroupNames?: string[];
   logGroups?: LogGroup[];
@@ -20,10 +23,14 @@ type Props = {
   onBeforeOpen?: () => void;
 };
 
-const rowGap = css`
-  gap: 3px;
-`;
-
+const logGroupStyles = css({
+  display: 'flex',
+  flexDirection: 'column',
+  marginTop: 8,
+  '& div:first-child': {
+    marginBottom: 8,
+  },
+});
 // used in Config Editor and in Log Query Editor
 export const LogGroupsField = ({
   datasource,
@@ -71,7 +78,7 @@ export const LogGroupsField = ({
   }, [datasource, legacyLogGroupNames, logGroups, onChange, region, loadingLogGroupsStarted]);
 
   return (
-    <div className={`gf-form gf-form--grow flex-grow-1 ${rowGap}`}>
+    <div className={logGroupStyles}>
       <LogGroupsSelector
         fetchLogGroups={async (params: Partial<DescribeLogGroupsRequest>) =>
           datasource?.resources.getLogGroups({ region: region, ...params }) ?? []
@@ -89,4 +96,33 @@ export const LogGroupsField = ({
       ></SelectedLogGroups>
     </div>
   );
+};
+
+// We had to bring back the Legacy Log Group selector to support due to an issue where GovClouds do not support the new Log Group API
+// when that is fixed we can get rid of this wrapper component and just export the LogGroupsField
+type WrapperProps = {
+  datasource: CloudWatchDatasource;
+  onChange: (logGroups: LogGroup[]) => void;
+  legacyLogGroupNames?: string[]; // will need this for a while for migration purposes
+  logGroups?: LogGroup[];
+  region: string;
+  maxNoOfVisibleLogGroups?: number;
+  onBeforeOpen?: () => void;
+
+  // Legacy Props, can remove once we remove support for Legacy Log Group Selector
+  legacyOnChange: (logGroups: string[]) => void;
+};
+
+export const LogGroupsFieldWrapper = (props: WrapperProps) => {
+  if (!config.featureToggles.cloudWatchCrossAccountQuerying) {
+    return (
+      <LegacyLogGroupSelection
+        {...props}
+        onChange={props.legacyOnChange}
+        legacyLogGroupNames={props.legacyLogGroupNames || []}
+      />
+    );
+  }
+
+  return <LogGroupsField {...props} />;
 };

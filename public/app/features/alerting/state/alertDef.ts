@@ -1,7 +1,7 @@
 import { isArray, reduce } from 'lodash';
 
 import { IconName } from '@grafana/ui';
-import { QueryPart, QueryPartDef } from 'app/features/alerting/state/query_part';
+import { QueryPartDef, QueryPart } from 'app/features/alerting/state/query_part';
 
 const alertQueryDef = new QueryPartDef({
   type: 'query',
@@ -48,6 +48,7 @@ const evalFunctions = [
 const evalOperators = [
   { text: 'OR', value: 'or' },
   { text: 'AND', value: 'and' },
+  { text: 'LOGIC OR', value: 'logic-or' },
 ];
 
 const reducerTypes = [
@@ -84,7 +85,7 @@ function createReducerPart(model: any) {
 
 // state can also contain a "Reason", ie. "Alerting (NoData)" which indicates that the actual state is "Alerting" but
 // the reason it is set to "Alerting" is "NoData"; a lack of data points to evaluate.
-export function normalizeAlertState(state: string) {
+function normalizeAlertState(state: string) {
   return state.toLowerCase().replace(/_/g, '').split(' ')[0];
 }
 
@@ -207,6 +208,25 @@ function getAlertAnnotationInfo(ah: any) {
   return '';
 }
 
+// Copy of getAlertAnnotationInfo, used in annotation tooltip
+function getAlertAnnotationText(annotationData: any) {
+  // backward compatibility, can be removed in grafana 5.x
+  // old way stored evalMatches in data property directly,
+  // new way stores it in evalMatches property on new data object
+
+  if (isArray(annotationData)) {
+    return joinEvalMatches(annotationData, ', ');
+  } else if (isArray(annotationData.evalMatches)) {
+    return joinEvalMatches(annotationData.evalMatches, ', ');
+  }
+
+  if (annotationData.error) {
+    return 'Error: ' + annotationData.error;
+  }
+
+  return '';
+}
+
 export default {
   alertQueryDef: alertQueryDef,
   getStateDisplayModel: getStateDisplayModel,
@@ -218,5 +238,6 @@ export default {
   reducerTypes: reducerTypes,
   createReducerPart: createReducerPart,
   getAlertAnnotationInfo: getAlertAnnotationInfo,
+  getAlertAnnotationText: getAlertAnnotationText,
   alertStateSortScore: alertStateSortScore,
 };

@@ -1,6 +1,6 @@
 import { includes, isDate } from 'lodash';
 
-import { TimeZone } from '../types/index';
+import { TimeZone } from '../types/time';
 
 import { DateTime, dateTime, dateTimeForTimeZone, DurationUnit, isDateTime, ISO_8601 } from './moment_wrapper';
 
@@ -43,9 +43,11 @@ export function parse(
     if (isDateTime(text)) {
       return text;
     }
+
     if (isDate(text)) {
       return dateTime(text);
     }
+
     // We got some non string which is not a moment nor Date. TS should be able to check for that but not always.
     return undefined;
   } else {
@@ -110,7 +112,7 @@ export function parseDateMath(
   fiscalYearStartMonth = 0
 ): DateTime | undefined {
   const strippedMathString = mathString.replace(/\s/g, '');
-  const dateTime = time;
+  const result = dateTime(time);
   let i = 0;
   const len = strippedMathString.length;
 
@@ -118,7 +120,7 @@ export function parseDateMath(
     const c = strippedMathString.charAt(i++);
     let type;
     let num;
-    let unit;
+    let unitString: string;
     let isFiscal = false;
 
     if (c === '/') {
@@ -152,34 +154,37 @@ export function parseDateMath(
         return undefined;
       }
     }
-    unit = strippedMathString.charAt(i++);
 
-    if (unit === 'f') {
-      unit = strippedMathString.charAt(i++);
+    unitString = strippedMathString.charAt(i++);
+
+    if (unitString === 'f') {
+      unitString = strippedMathString.charAt(i++);
       isFiscal = true;
     }
+
+    const unit = unitString as DurationUnit;
 
     if (!includes(units, unit)) {
       return undefined;
     } else {
       if (type === 0) {
         if (isFiscal) {
-          roundToFiscal(fiscalYearStartMonth, dateTime, unit, roundUp);
+          roundToFiscal(fiscalYearStartMonth, result, unit, roundUp);
         } else {
           if (roundUp) {
-            dateTime.endOf(unit);
+            result.endOf(unit);
           } else {
-            dateTime.startOf(unit);
+            result.startOf(unit);
           }
         }
       } else if (type === 1) {
-        dateTime.add(num, unit);
+        result.add(num, unit);
       } else if (type === 2) {
-        dateTime.subtract(num, unit);
+        result.subtract(num, unit);
       }
     }
   }
-  return dateTime;
+  return result;
 }
 
 export function roundToFiscal(fyStartMonth: number, dateTime: any, unit: string, roundUp: boolean | undefined) {

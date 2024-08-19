@@ -4,42 +4,35 @@ import usePrevious from 'react-use/lib/usePrevious';
 
 import { VariableFormatID } from '@grafana/schema';
 
-import { compareArrayValues, compareDataFrameStructures, guessFieldTypeForField } from '../dataframe';
+import { compareArrayValues, compareDataFrameStructures } from '../dataframe/frameComparisons';
+import { guessFieldTypeForField } from '../dataframe/processDataFrame';
 import { PanelPlugin } from '../panel/PanelPlugin';
-import { GrafanaTheme2 } from '../themes';
 import { asHexString } from '../themes/colorManipulator';
-import { fieldMatchers, reduceField, ReducerID } from '../transformations';
+import { GrafanaTheme2 } from '../themes/types';
+import { ReducerID, reduceField } from '../transformations/fieldReducer';
+import { fieldMatchers } from '../transformations/matchers';
+import { ScopedVars, DataContextScopedVar } from '../types/ScopedVars';
+import { DataFrame, NumericRange, FieldType, Field, ValueLinkConfig, FieldConfig } from '../types/dataFrame';
+import { LinkModel, DataLink } from '../types/dataLink';
+import { DisplayProcessor, DisplayValue, DecimalCount } from '../types/displayValue';
+import { FieldColorModeId } from '../types/fieldColor';
 import {
-  ApplyFieldOverrideOptions,
-  DataContextScopedVar,
-  DataFrame,
-  DataLink,
-  DecimalCount,
-  DisplayProcessor,
-  DisplayValue,
   DynamicConfigValue,
-  Field,
-  FieldColorModeId,
-  FieldConfig,
-  FieldConfigPropertyItem,
-  FieldConfigSource,
+  ApplyFieldOverrideOptions,
   FieldOverrideContext,
-  FieldType,
+  FieldConfigPropertyItem,
   DataLinkPostProcessor,
-  InterpolateFunction,
-  LinkModel,
-  NumericRange,
-  PanelData,
-  ScopedVars,
-  TimeZone,
-  ValueLinkConfig,
-} from '../types';
+  FieldConfigSource,
+} from '../types/fieldOverrides';
+import { InterpolateFunction, PanelData } from '../types/panel';
+import { TimeZone } from '../types/time';
 import { FieldMatcher } from '../types/transformations';
-import { locationUtil } from '../utils';
 import { mapInternalLinkToExplore } from '../utils/dataLinks';
+import { locationUtil } from '../utils/location';
 
 import { FieldConfigOptionsRegistry } from './FieldConfigOptionsRegistry';
 import { getDisplayProcessor, getRawDisplayProcessor } from './displayProcessor';
+import { getMinMaxAndDelta } from './scale';
 import { standardFieldConfigEditorRegistry } from './standardFieldConfigEditorRegistry';
 
 interface OverrideProps {
@@ -166,15 +159,8 @@ export function applyFieldOverrides(options: ApplyFieldOverrideOptions): DataFra
       }
 
       // Set the Min/Max value automatically
-      let range: NumericRange | undefined = undefined;
-      if (field.type === FieldType.number) {
-        if (!globalRange && (!isNumber(config.min) || !isNumber(config.max))) {
-          globalRange = findNumericFieldMinMax(options.data!);
-        }
-        const min = config.min ?? globalRange!.min;
-        const max = config.max ?? globalRange!.max;
-        range = { min, max, delta: max! - min! };
-      }
+      const { range, newGlobalRange } = calculateRange(config, field, globalRange, options.data!);
+      globalRange = newGlobalRange;
 
       field.state!.seriesIndex = seriesIndex;
       field.state!.range = range;
@@ -212,6 +198,13 @@ export function applyFieldOverrides(options: ApplyFieldOverrideOptions): DataFra
         for (const nestedFrames of field.values) {
           for (let nfIndex = 0; nfIndex < nestedFrames.length; nfIndex++) {
             for (const valueField of nestedFrames[nfIndex].fields) {
+              // Get display processor for nested fields
+              valueField.display = getDisplayProcessor({
+                field: valueField,
+                theme: options.theme,
+                timeZone: options.timeZone,
+              });
+
               valueField.state = {
                 scopedVars: {
                   __dataContext: {
@@ -243,13 +236,39 @@ export function applyFieldOverrides(options: ApplyFieldOverrideOptions): DataFra
   });
 }
 
+function calculateRange(
+  config: FieldConfig,
+  field: Field,
+  globalRange: NumericRange | undefined,
+  data: DataFrame[]
+): { range?: { min?: number | null; max?: number | null; delta: number }; newGlobalRange: NumericRange | undefined } {
+  // Only calculate ranges when the field is a number and one of min/max is set to auto.
+  if (field.type !== FieldType.number || (isNumber(config.min) && isNumber(config.max))) {
+    return { newGlobalRange: globalRange };
+  }
+
+  // Calculate the min/max from the field.
+  if (config.fieldMinMax) {
+    const localRange = getMinMaxAndDelta(field);
+    const min = config.min ?? localRange.min;
+    const max = config.max ?? localRange.max;
+    return { range: { min, max, delta: max! - min! }, newGlobalRange: globalRange };
+  }
+
+  // We use the global range if supplied, otherwise we calculate it.
+  const newGlobalRange = globalRange ?? findNumericFieldMinMax(data);
+  const min = config.min ?? newGlobalRange!.min;
+  const max = config.max ?? newGlobalRange!.max;
+  return { range: { min, max, delta: max! - min! }, newGlobalRange };
+}
+
 // this is a significant optimization for streaming, where we currently re-process all values in the buffer on ech update
 // via field.display(value). this can potentially be removed once we...
 // 1. process data packets incrementally and/if cache the results in the streaming datafame (maybe by buffer index)
 // 2. have the ability to selectively get display color or text (but not always both, which are each quite expensive)
 // 3. sufficently optimize text formatting and threshold color determinitation
 function cachingDisplayProcessor(disp: DisplayProcessor, maxCacheSize = 2500): DisplayProcessor {
-  type dispCache = Map<any, DisplayValue>;
+  type dispCache = Map<unknown, DisplayValue>;
   // decimals -> cache mapping, -1 is unspecified decimals
   const caches = new Map<number, dispCache>();
 
@@ -258,7 +277,7 @@ function cachingDisplayProcessor(disp: DisplayProcessor, maxCacheSize = 2500): D
     caches.set(i, new Map());
   }
 
-  return (value: any, decimals?: DecimalCount) => {
+  return (value: unknown, decimals?: DecimalCount) => {
     let cache = caches.get(decimals ?? -1)!;
 
     let v = cache.get(value);
@@ -342,8 +361,8 @@ export function setFieldConfigDefaults(config: FieldConfig, defaults: FieldConfi
 }
 
 function processFieldConfigValue(
-  destination: Record<string, any>, // it's mutable
-  source: Record<string, any>,
+  destination: Record<string, unknown>, // it's mutable
+  source: Record<string, unknown>,
   fieldConfigProperty: FieldConfigPropertyItem,
   context: FieldOverrideEnv
 ) {
@@ -441,9 +460,23 @@ export const getLinksSupplier =
 
       let linkModel: LinkModel<Field>;
 
+      let href =
+        link.onClick || !link.onBuildUrl
+          ? link.url
+          : link.onBuildUrl({
+              origin: field,
+              replaceVariables: boundReplaceVariables,
+            });
+
+      if (href) {
+        href = locationUtil.assureBaseUrl(href.replace(/\n/g, ''));
+        href = replaceVariables(href, dataLinkScopedVars, VariableFormatID.UriEncode);
+        href = locationUtil.processUrl(href);
+      }
+
       if (link.onClick) {
         linkModel = {
-          href: link.url,
+          href,
           title: replaceVariables(link.title || '', dataLinkScopedVars),
           target: link.targetBlank ? '_blank' : undefined,
           onClick: (evt: MouseEvent, origin: Field) => {
@@ -456,19 +489,6 @@ export const getLinksSupplier =
           origin: field,
         };
       } else {
-        let href = link.onBuildUrl
-          ? link.onBuildUrl({
-              origin: field,
-              replaceVariables: boundReplaceVariables,
-            })
-          : link.url;
-
-        if (href) {
-          href = locationUtil.assureBaseUrl(href.replace(/\n/g, ''));
-          href = replaceVariables(href, dataLinkScopedVars, VariableFormatID.UriEncode);
-          href = locationUtil.processUrl(href);
-        }
-
         linkModel = {
           href,
           title: replaceVariables(link.title || '', dataLinkScopedVars),

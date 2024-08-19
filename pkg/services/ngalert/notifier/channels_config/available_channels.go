@@ -1,9 +1,12 @@
 package channels_config
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	alertingOpsgenie "github.com/grafana/alerting/receivers/opsgenie"
+	alertingPagerduty "github.com/grafana/alerting/receivers/pagerduty"
 	alertingTemplates "github.com/grafana/alerting/templates"
 )
 
@@ -265,6 +268,7 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					Description:  "Optional message. You can use templates to customize this field. Using a custom message will replace the default message",
 					Element:      ElementTypeTextArea,
 					PropertyName: "message",
+					Placeholder:  alertingTemplates.DefaultMessageEmbed,
 				},
 				{ // New in 9.0.
 					Label:        "Subject",
@@ -360,6 +364,14 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					InputType:    InputTypeText,
 					PropertyName: "details",
 				},
+				{ //New in 11.1
+					Label:        "URL",
+					Description:  "The URL to send API requests to",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Placeholder:  alertingPagerduty.DefaultURL,
+					PropertyName: "url",
+				},
 			},
 		},
 		{
@@ -404,6 +416,87 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					InputType:    InputTypeText,
 					Description:  "Templated description of the message",
 					PropertyName: "description",
+					Placeholder:  alertingTemplates.DefaultMessageEmbed,
+				},
+			},
+		},
+		{
+			Type:        "oncall",
+			Name:        "Grafana OnCall",
+			Description: "Sends alerts to Grafana OnCall",
+			Heading:     "Grafana OnCall settings",
+			Options: []NotifierOption{
+				{
+					Label:        "URL",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "url",
+					Required:     true,
+				},
+				{
+					Label:   "HTTP Method",
+					Element: ElementTypeSelect,
+					SelectOptions: []SelectOption{
+						{
+							Value: "POST",
+							Label: "POST",
+						},
+						{
+							Value: "PUT",
+							Label: "PUT",
+						},
+					},
+					PropertyName: "httpMethod",
+				},
+				{
+					Label:        "HTTP Basic Authentication - Username",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "username",
+				},
+				{
+					Label:        "HTTP Basic Authentication - Password",
+					Element:      ElementTypeInput,
+					InputType:    InputTypePassword,
+					PropertyName: "password",
+					Secure:       true,
+				},
+				{ // New in 9.1
+					Label:        "Authorization Header - Scheme",
+					Description:  "Optionally provide a scheme for the Authorization Request Header. Default is Bearer.",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "authorization_scheme",
+					Placeholder:  "Bearer",
+				},
+				{ // New in 9.1
+					Label:        "Authorization Header - Credentials",
+					Description:  "Credentials for the Authorization Request header. Only one of HTTP Basic Authentication or Authorization Request Header can be set.",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "authorization_credentials",
+					Secure:       true,
+				},
+				{ // New in 8.0. TODO: How to enforce only numbers?
+					Label:        "Max Alerts",
+					Description:  "Max alerts to include in a notification. Remaining alerts in the same batch will be ignored above this number. 0 means no limit.",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "maxAlerts",
+				},
+				{ // New in 9.3.
+					Label:        "Title",
+					Description:  "Templated title of the message.",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					PropertyName: "title",
+					Placeholder:  alertingTemplates.DefaultMessageTitleEmbed,
+				},
+				{ // New in 9.3.
+					Label:        "Message",
+					Description:  "Custom message. You can use template variables.",
+					Element:      ElementTypeTextArea,
+					PropertyName: "message",
 					Placeholder:  alertingTemplates.DefaultMessageEmbed,
 				},
 			},
@@ -732,6 +825,15 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					PropertyName: "chatid",
 					Required:     true,
 				},
+				{
+					Label:          "Message Thread ID",
+					Element:        ElementTypeInput,
+					InputType:      InputTypeText,
+					Description:    "Integer Telegram Message Thread Identifier",
+					PropertyName:   "message_thread_id",
+					Required:       false,
+					ValidationRule: "-?[0-9]{1,10}",
+				},
 				{ // New in 8.0.
 					Label:        "Message",
 					Element:      ElementTypeTextArea,
@@ -761,6 +863,18 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					},
 					Description:  `Mode for parsing entities in the message text. Default is 'HTML'`,
 					PropertyName: "parse_mode",
+				},
+				{
+					Label:        "Disable Web Page Preview",
+					Description:  "Disables link previews for links in this message",
+					Element:      ElementTypeCheckbox,
+					PropertyName: "disable_web_page_preview",
+				},
+				{
+					Label:        "Protect Content",
+					Description:  "Protects the contents of the sent message from forwarding and saving",
+					Element:      ElementTypeCheckbox,
+					PropertyName: "protect_content",
 				},
 				{
 					Label:        "Disable Notification",
@@ -1015,15 +1129,15 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 		},
 		{
 			Type:        "googlechat",
-			Name:        "Google Hangouts Chat",
-			Description: "Sends notifications to Google Hangouts Chat via webhooks based on the official JSON message format",
-			Heading:     "Google Hangouts Chat settings",
+			Name:        "Google Chat",
+			Description: "Sends notifications to Google Chat via webhooks based on the official JSON message format",
+			Heading:     "Google Chat settings",
 			Options: []NotifierOption{
 				{
 					Label:        "URL",
 					Element:      ElementTypeInput,
 					InputType:    InputTypeText,
-					Placeholder:  "Google Hangouts Chat incoming webhook url",
+					Placeholder:  "Google Chat incoming webhook url",
 					PropertyName: "url",
 					Required:     true,
 				},
@@ -1176,7 +1290,7 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 				}, {
 					Label:        "Override priority",
 					Element:      ElementTypeCheckbox,
-					Description:  "Allow the alert priority to be set using the og_priority annotation",
+					Description:  "Allow the alert priority to be set using the og_priority label.",
 					PropertyName: "overridePriority",
 				},
 				{
@@ -1198,6 +1312,40 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 					},
 					Description:  "Send the common annotations to Opsgenie as either Extra Properties, Tags or both",
 					PropertyName: "sendTagsAs",
+				},
+				// New in 10.3
+				{
+					Label:        "Responders",
+					PropertyName: "responders",
+					Description:  "If the API key belongs to a team, this field is ignored.",
+					Element:      ElementSubformArray,
+					SubformOptions: []NotifierOption{
+						{
+							Label:        "Type",
+							Description:  fmt.Sprintf("%s or a template", strings.Join(alertingOpsgenie.SupportedResponderTypes, ", ")),
+							Element:      ElementTypeInput,
+							Required:     true,
+							PropertyName: "type",
+						},
+						{
+							Label:        "Name",
+							Element:      ElementTypeInput,
+							Description:  "Name of the responder. Must be specified if ID and Username are empty or if the type is 'teams'.",
+							PropertyName: "name",
+						},
+						{
+							Label:        "ID",
+							Element:      ElementTypeInput,
+							Description:  "ID of the responder. Must be specified if name and Username are empty.",
+							PropertyName: "id",
+						},
+						{
+							Label:        "Username",
+							Element:      ElementTypeInput,
+							Description:  "User name of the responder. Must be specified if ID and Name are empty.",
+							PropertyName: "username",
+						},
+					},
 				},
 			},
 		},
@@ -1245,5 +1393,135 @@ func GetAvailableNotifiers() []*NotifierPlugin {
 				},
 			},
 		},
+		{ // Since Grafana 11.1
+			Type:        "sns",
+			Name:        "AWS SNS",
+			Description: "Sends notifications to Cisco Webex Teams",
+			Heading:     "Webex settings",
+			Info:        "Notifications can be configured for any Cisco Webex Teams",
+			Options: []NotifierOption{
+				{
+					Label:        "The Amazon SNS API URL",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Placeholder:  "",
+					PropertyName: "api_url",
+				},
+				{
+					Label:        "SigV4 Authentication",
+					Description:  "Configures AWS's Signature Verification 4 signing process to sign requests",
+					Element:      ElementTypeSubform,
+					PropertyName: "sigv4",
+					SubformOptions: []NotifierOption{
+						{
+							Label:        "Region",
+							Description:  "The AWS region. If blank, the region from the default credentials chain is used.",
+							Element:      ElementTypeInput,
+							InputType:    InputTypeText,
+							Placeholder:  "",
+							PropertyName: "region",
+						},
+						{
+							Label:        "Access Key",
+							Description:  "The AWS API access key.",
+							Element:      ElementTypeInput,
+							InputType:    InputTypeText,
+							Placeholder:  "",
+							PropertyName: "access_key",
+							Secure:       true,
+						},
+						{
+							Label:        "Secret Key",
+							Description:  "The AWS API secret key.",
+							Element:      ElementTypeInput,
+							InputType:    InputTypeText,
+							Placeholder:  "",
+							PropertyName: "secret_key",
+							Secure:       true,
+						},
+						{
+							Label:        "Profile",
+							Description:  "Named AWS profile used to authenticate",
+							Element:      ElementTypeInput,
+							InputType:    InputTypeText,
+							Placeholder:  "",
+							PropertyName: "profile",
+						},
+						{
+							Label:        "Role ARN",
+							Description:  "AWS Role ARN, an alternative to using AWS API keys",
+							Element:      ElementTypeInput,
+							InputType:    InputTypeText,
+							Placeholder:  "",
+							PropertyName: "role_arn",
+						},
+					},
+				},
+				{
+					Label:        "SNS topic ARN",
+					Description:  "If you don't specify this value, you must specify a value for the phone_number or target_arn. If you are using a FIFO SNS topic you should set a message group interval longer than 5 minutes to prevent messages with the same group key being deduplicated by the SNS default deduplication window.",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Placeholder:  "",
+					PropertyName: "topic_arn",
+				},
+				{
+					Label:        "Phone number",
+					Description:  "Phone number if message is delivered via SMS in E.164 format. If you don't specify this value, you must specify a value for the topic_arn or target_arn",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Placeholder:  ``,
+					PropertyName: "phone_number",
+					Secure:       false,
+				},
+				{
+					Label:        "Target ARN",
+					Description:  "The mobile platform endpoint ARN if message is delivered via mobile notifications. If you don't specify this value, you must specify a value for the topic_arn or phone_number",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Placeholder:  ``,
+					PropertyName: "target_arn",
+				},
+				{
+					Label:        "Subject",
+					Element:      ElementTypeInput,
+					InputType:    InputTypeText,
+					Description:  "Optional subject. You can use templates to customize this field",
+					PropertyName: "subject",
+					Placeholder:  alertingTemplates.DefaultMessageTitleEmbed,
+				},
+				{
+					Label:        "Message",
+					Description:  "Optional message. You can use templates to customize this field. Using a custom message will replace the default message",
+					Element:      ElementTypeTextArea,
+					PropertyName: "message",
+					Placeholder:  alertingTemplates.DefaultMessageEmbed,
+				},
+				{
+					Label:        "Attributes",
+					Description:  "SNS message attributes",
+					Element:      ElementTypeKeyValueMap,
+					InputType:    InputTypeText,
+					PropertyName: "attributes",
+				},
+			},
+		},
 	}
+}
+
+// GetSecretKeysForContactPointType returns settings keys of contact point of the given type that are expected to be secrets. Returns error is contact point type is not known.
+func GetSecretKeysForContactPointType(contactPointType string) ([]string, error) {
+	notifiers := GetAvailableNotifiers()
+	for _, n := range notifiers {
+		if n.Type == contactPointType {
+			var secureFields []string
+			for _, field := range n.Options {
+				if field.Secure {
+					secureFields = append(secureFields, field.PropertyName)
+				}
+			}
+			return secureFields, nil
+		}
+	}
+	return nil, fmt.Errorf("no secrets configured for type '%s'", contactPointType)
 }

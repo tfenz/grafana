@@ -26,8 +26,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/grafana/grafana/pkg/util/errutil"
-	"github.com/grafana/grafana/pkg/util/errutil/errhttp"
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
+	"github.com/grafana/grafana/pkg/util/errhttp"
 )
 
 // Context represents the runtime context of current request of Macaron instance.
@@ -102,7 +102,7 @@ const (
 )
 
 // HTML renders the HTML with default template set.
-func (ctx *Context) HTML(status int, name string, data interface{}) {
+func (ctx *Context) HTML(status int, name string, data any) {
 	ctx.Resp.Header().Set(headerContentType, contentTypeHTML)
 	ctx.Resp.WriteHeader(status)
 	if err := ctx.template.ExecuteTemplate(ctx.Resp, name, data); err != nil {
@@ -113,7 +113,7 @@ func (ctx *Context) HTML(status int, name string, data interface{}) {
 	}
 }
 
-func (ctx *Context) JSON(status int, data interface{}) {
+func (ctx *Context) JSON(status int, data any) {
 	ctx.Resp.Header().Set(headerContentType, contentTypeJSON)
 	ctx.Resp.WriteHeader(status)
 	enc := json.NewEncoder(ctx.Resp)
@@ -204,4 +204,10 @@ func (ctx *Context) GetCookie(name string) string {
 	}
 	val, _ := url.QueryUnescape(cookie.Value)
 	return val
+}
+
+// QueryFloat64 returns query result in float64 type.
+func (ctx *Context) QueryFloat64(name string) float64 {
+	n, _ := strconv.ParseFloat(ctx.Query(name), 64)
+	return n
 }

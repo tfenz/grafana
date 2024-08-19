@@ -7,19 +7,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
 	"github.com/grafana/grafana/pkg/infra/slugify"
 	"github.com/grafana/grafana/pkg/services/annotations"
 	"github.com/grafana/grafana/pkg/services/org"
-	"github.com/grafana/grafana/pkg/util/errutil"
 )
 
-var ErrInternal = errutil.Internal("accesscontrol.internal")
+const (
+	CacheHit  = "hit"
+	CacheMiss = "miss"
+)
+
+var (
+	ErrInternal        = errutil.Internal("accesscontrol.internal")
+	CacheUsageStatuses = []string{CacheHit, CacheMiss}
+)
 
 // RoleRegistration stores a role and its assignments to built-in roles
 // (Viewer, Editor, Admin, Grafana Admin)
 type RoleRegistration struct {
-	Role   RoleDTO
-	Grants []string
+	Role    RoleDTO
+	Grants  []string
+	Exclude []string
 }
 
 // Role is the model for Role in RBAC.
@@ -62,6 +71,7 @@ func (r Role) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// swagger:ignore
 type RoleDTO struct {
 	Version     int64        `json:"version"`
 	UID         string       `xorm:"uid" json:"uid"`
@@ -135,6 +145,12 @@ func (r *RoleDTO) IsExternalService() bool {
 	return strings.HasPrefix(r.Name, ExternalServiceRolePrefix) || strings.HasPrefix(r.UID, ExternalServiceRoleUIDPrefix)
 }
 
+// swagger:model RoleDTO
+type RoleDTOStatic struct {
+	RoleDTO
+	Global bool `json:"global" xorm:"-"`
+}
+
 func (r RoleDTO) MarshalJSON() ([]byte, error) {
 	type Alias RoleDTO
 
@@ -199,19 +215,7 @@ func (p Permission) OSSPermission() Permission {
 
 // SplitScope returns kind, attribute and Identifier
 func (p Permission) SplitScope() (string, string, string) {
-	if p.Scope == "" {
-		return "", "", ""
-	}
-
-	fragments := strings.Split(p.Scope, ":")
-	switch l := len(fragments); l {
-	case 1: // Splitting a wildcard scope "*" -> kind: "*"; attribute: "*"; identifier: "*"
-		return fragments[0], fragments[0], fragments[0]
-	case 2: // Splitting a wildcard scope with specified kind "dashboards:*" -> kind: "dashboards"; attribute: "*"; identifier: "*"
-		return fragments[0], fragments[1], fragments[1]
-	default: // Splitting a scope with all fields specified "dashboards:uid:my_dash" -> kind: "dashboards"; attribute: "uid"; identifier: "my_dash"
-		return fragments[0], fragments[1], strings.Join(fragments[2:], ":")
-	}
+	return SplitScope(p.Scope)
 }
 
 type GetUserPermissionsQuery struct {
@@ -225,21 +229,22 @@ type GetUserPermissionsQuery struct {
 // ResourcePermission is structure that holds all actions that either a team / user / builtin-role
 // can perform against specific resource.
 type ResourcePermission struct {
-	ID          int64
-	RoleName    string
-	Actions     []string
-	Scope       string
-	UserId      int64
-	UserLogin   string
-	UserEmail   string
-	TeamId      int64
-	TeamEmail   string
-	Team        string
-	BuiltInRole string
-	IsManaged   bool
-	IsInherited bool
-	Created     time.Time
-	Updated     time.Time
+	ID               int64
+	RoleName         string
+	Actions          []string
+	Scope            string
+	UserId           int64
+	UserLogin        string
+	UserEmail        string
+	TeamId           int64
+	TeamEmail        string
+	Team             string
+	BuiltInRole      string
+	IsManaged        bool
+	IsInherited      bool
+	IsServiceAccount bool
+	Created          time.Time
+	Updated          time.Time
 }
 
 func (p *ResourcePermission) Contains(targetActions []string) bool {
@@ -273,8 +278,7 @@ type SetResourcePermissionCommand struct {
 }
 
 type SaveExternalServiceRoleCommand struct {
-	OrgID             int64
-	Global            bool
+	AssignmentOrgID   int64
 	ExternalServiceID string
 	ServiceAccountID  int64
 	Permissions       []Permission
@@ -287,10 +291,6 @@ func (cmd *SaveExternalServiceRoleCommand) Validate() error {
 
 	// slugify the external service id ID for the role to have correct name and uid
 	cmd.ExternalServiceID = slugify.Slugify(cmd.ExternalServiceID)
-
-	if (cmd.OrgID == GlobalOrgID) != cmd.Global {
-		return fmt.Errorf("invalid org id %d for global role %t", cmd.OrgID, cmd.Global)
-	}
 
 	// Check and deduplicate permissions
 	if cmd.Permissions == nil || len(cmd.Permissions) == 0 {
@@ -318,17 +318,11 @@ func (cmd *SaveExternalServiceRoleCommand) Validate() error {
 }
 
 const (
-	GlobalOrgID                  = 0
-	FixedRolePrefix              = "fixed:"
-	ManagedRolePrefix            = "managed:"
-	BasicRolePrefix              = "basic:"
-	PluginRolePrefix             = "plugins:"
-	ExternalServiceRolePrefix    = "externalservice:"
-	BasicRoleUIDPrefix           = "basic_"
-	ExternalServiceRoleUIDPrefix = "externalservice_"
-	RoleGrafanaAdmin             = "Grafana Admin"
-
+	GlobalOrgID      = 0
+	NoOrgID          = int64(-1)
 	GeneralFolderUID = "general"
+	K6FolderUID      = "k6-app"
+	RoleGrafanaAdmin = "Grafana Admin"
 
 	// Permission actions
 
@@ -337,9 +331,8 @@ const (
 	ActionAPIKeyDelete = "apikeys:delete"
 
 	// Users actions
-	ActionUsersRead        = "users:read"
-	ActionUsersWrite       = "users:write"
-	ActionUsersImpersonate = "users:impersonate"
+	ActionUsersRead  = "users:read"
+	ActionUsersWrite = "users:write"
 
 	// We can ignore gosec G101 since this does not contain any credentials.
 	// nolint:gosec
@@ -403,7 +396,6 @@ const (
 
 	// Settings scope
 	ScopeSettingsAll  = "settings:*"
-	ScopeSettingsAuth = "settings:auth:*"
 	ScopeSettingsSAML = "settings:auth.saml:*"
 
 	// Team related actions
@@ -438,9 +430,23 @@ const (
 	ActionAlertingInstanceUpdate = "alert.instances:write"
 	ActionAlertingInstanceRead   = "alert.instances:read"
 
+	ActionAlertingSilencesRead   = "alert.silences:read"
+	ActionAlertingSilencesCreate = "alert.silences:create"
+	ActionAlertingSilencesWrite  = "alert.silences:write"
+
 	// Alerting Notification policies actions
 	ActionAlertingNotificationsRead  = "alert.notifications:read"
 	ActionAlertingNotificationsWrite = "alert.notifications:write"
+
+	// Alerting notifications time interval actions
+	ActionAlertingNotificationsTimeIntervalsRead   = "alert.notifications.time-intervals:read"
+	ActionAlertingNotificationsTimeIntervalsWrite  = "alert.notifications.time-intervals:write"
+	ActionAlertingNotificationsTimeIntervalsDelete = "alert.notifications.time-intervals:delete"
+
+	// Alerting receiver actions
+	ActionAlertingReceiversList        = "alert.notifications.receivers:list"
+	ActionAlertingReceiversRead        = "alert.notifications.receivers:read"
+	ActionAlertingReceiversReadSecrets = "alert.notifications.receivers.secrets:read"
 
 	// External alerting rule actions. We can only narrow it down to writes or reads, as we don't control the atomicity in the external system.
 	ActionAlertingRuleExternalWrite = "alert.rules.external:write"
@@ -455,18 +461,38 @@ const (
 	ActionAlertingNotificationsExternalRead  = "alert.notifications.external:read"
 
 	// Alerting provisioning actions
-	ActionAlertingProvisioningRead        = "alert.provisioning:read"
-	ActionAlertingProvisioningReadSecrets = "alert.provisioning.secrets:read"
-	ActionAlertingProvisioningWrite       = "alert.provisioning:write"
+	ActionAlertingProvisioningRead               = "alert.provisioning:read"
+	ActionAlertingProvisioningReadSecrets        = "alert.provisioning.secrets:read"
+	ActionAlertingProvisioningWrite              = "alert.provisioning:write"
+	ActionAlertingRulesProvisioningRead          = "alert.rules.provisioning:read"
+	ActionAlertingRulesProvisioningWrite         = "alert.rules.provisioning:write"
+	ActionAlertingNotificationsProvisioningRead  = "alert.notifications.provisioning:read"
+	ActionAlertingNotificationsProvisioningWrite = "alert.notifications.provisioning:write"
+
+	// ActionAlertingProvisioningSetStatus Gives access to set provisioning status to alerting resources. Cannot be used alone. Only in conjunction with other permissions.
+	ActionAlertingProvisioningSetStatus = "alert.provisioning.provenance:write"
 
 	// Feature Management actions
 	ActionFeatureManagementRead  = "featuremgmt.read"
 	ActionFeatureManagementWrite = "featuremgmt.write"
+
+	// Library Panel actions
+	ActionLibraryPanelsCreate = "library.panels:create"
+	ActionLibraryPanelsRead   = "library.panels:read"
+	ActionLibraryPanelsWrite  = "library.panels:write"
+	ActionLibraryPanelsDelete = "library.panels:delete"
+
+	// Usage stats actions
+	ActionUsageStatsRead = "server.usagestats.report:read"
 )
 
 var (
 	// Team scope
 	ScopeTeamsID = Scope("teams", "id", Parameter(":teamId"))
+
+	ScopeSettingsOAuth = func(provider string) string {
+		return Scope("settings", "auth."+provider, "*")
+	}
 
 	// Annotation scopes
 	ScopeAnnotationsRoot             = "annotations"
@@ -503,6 +529,7 @@ var TeamsAccessEvaluator = EvalAny(
 		EvalAny(
 			EvalPermission(ActionTeamsWrite),
 			EvalPermission(ActionTeamsPermissionsWrite),
+			EvalPermission(ActionTeamsPermissionsRead),
 		),
 	),
 )
@@ -541,3 +568,8 @@ var OrgsCreateAccessEvaluator = EvalAll(
 
 // ApiKeyAccessEvaluator is used to protect the "Configuration > API keys" page access
 var ApiKeyAccessEvaluator = EvalPermission(ActionAPIKeyRead)
+
+type QueryWithOrg struct {
+	OrgId  *int64 `json:"orgId"`
+	Global bool   `json:"global"`
+}

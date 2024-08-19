@@ -7,8 +7,9 @@
 This module returns a Drone configuration including pipelines and secrets.
 """
 
-load("scripts/drone/events/pr.star", "pr_pipelines")
+load("scripts/drone/events/cron.star", "cronjobs")
 load("scripts/drone/events/main.star", "main_pipelines")
+load("scripts/drone/events/pr.star", "pr_pipelines")
 load(
     "scripts/drone/events/release.star",
     "integration_test_pipelines",
@@ -16,31 +17,30 @@ load(
     "publish_npm_pipelines",
     "publish_packages_pipeline",
 )
+load("scripts/drone/events/rrc-patch.star", "rrc_patch_pipelines")
 load(
-    "scripts/drone/rgm.star",
-    "rgm",
+    "scripts/drone/pipelines/ci_images.star",
+    "publish_ci_windows_test_image_pipeline",
 )
 load(
     "scripts/drone/pipelines/publish_images.star",
     "publish_image_pipelines_public",
 )
 load(
-    "scripts/drone/pipelines/ci_images.star",
-    "publish_ci_build_container_image_pipeline",
-    "publish_ci_windows_test_image_pipeline",
-)
-load(
     "scripts/drone/pipelines/windows.star",
     "windows_test_backend",
 )
-load("scripts/drone/version.star", "version_branch_pipelines")
-load("scripts/drone/events/cron.star", "cronjobs")
+load(
+    "scripts/drone/rgm.star",
+    "rgm",
+)
 load("scripts/drone/vault.star", "secrets")
 
 def main(_ctx):
     return (
         pr_pipelines() +
         main_pipelines() +
+        rrc_patch_pipelines() +
         publish_image_pipelines_public() +
         publish_artifacts_pipelines("public") +
         publish_npm_pipelines() +
@@ -50,10 +50,8 @@ def main(_ctx):
             "event": ["promote"],
             "target": ["test-windows"],
         }, "oss", "testing")] +
-        version_branch_pipelines() +
         integration_test_pipelines() +
         publish_ci_windows_test_image_pipeline() +
-        publish_ci_build_container_image_pipeline() +
         cronjobs() +
         secrets()
     )

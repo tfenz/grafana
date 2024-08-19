@@ -1,16 +1,19 @@
 import { chain, cloneDeep, defaults, find } from 'lodash';
 
 import { PanelPluginMeta } from '@grafana/data';
+import { locationService } from '@grafana/runtime';
 import config from 'app/core/config';
 import { LS_PANEL_COPY_KEY } from 'app/core/constants';
 import store from 'app/core/store';
 import { DashboardModel, PanelModel } from 'app/features/dashboard/state';
 import { calculateNewPanelGridPos } from 'app/features/dashboard/utils/panel';
 
+export const NEW_PANEL_TITLE = 'Panel Title';
+
 export function onCreateNewPanel(dashboard: DashboardModel, datasource?: string): number | undefined {
   const newPanel: Partial<PanelModel> = {
     type: 'timeseries',
-    title: 'Panel Title',
+    title: NEW_PANEL_TITLE,
     gridPos: calculateNewPanelGridPos(dashboard),
     datasource: datasource ? { uid: datasource } : null,
     isNew: true,
@@ -43,6 +46,10 @@ export function onCreateNewRow(dashboard: DashboardModel) {
   dashboard.addPanel(newRow);
 }
 
+export function onImportDashboard() {
+  locationService.push('/dashboard/import');
+}
+
 export function onAddLibraryPanel(dashboard: DashboardModel) {
   const newPanel = {
     type: 'add-library-panel',
@@ -63,7 +70,7 @@ export function onPasteCopiedPanel(dashboard: DashboardModel, panelPluginInfo?: 
 
   const newPanel = {
     type: panelPluginInfo.id,
-    title: 'Panel Title',
+    title: NEW_PANEL_TITLE,
     gridPos: {
       x: gridPos.x,
       y: gridPos.y,

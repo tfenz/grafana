@@ -1,6 +1,7 @@
 import { map } from 'rxjs/operators';
 
-import { DataFrame, SynchronousDataTransformerInfo, FieldMatcher } from '../../types';
+import { DataFrame } from '../../types/dataFrame';
+import { DataTransformContext, FieldMatcher, SynchronousDataTransformerInfo } from '../../types/transformations';
 import { fieldMatchers } from '../matchers';
 import { FieldMatcherID } from '../matchers/ids';
 
@@ -32,12 +33,12 @@ export const joinByFieldTransformer: SynchronousDataTransformerInfo<JoinByFieldO
   operator: (options, ctx) => (source) =>
     source.pipe(map((data) => joinByFieldTransformer.transformer(options, ctx)(data))),
 
-  transformer: (options: JoinByFieldOptions) => {
+  transformer: (options: JoinByFieldOptions, ctx: DataTransformContext) => {
     let joinBy: FieldMatcher | undefined = undefined;
     return (data: DataFrame[]) => {
       if (data.length > 1) {
         if (options.byField && !joinBy) {
-          joinBy = fieldMatchers.get(FieldMatcherID.byName).get(options.byField);
+          joinBy = fieldMatchers.get(FieldMatcherID.byName).get(ctx.interpolate(options.byField));
         }
         const joined = joinDataFrames({ frames: data, joinBy, mode: options.mode });
         if (joined) {

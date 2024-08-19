@@ -35,18 +35,39 @@ func RequestMetrics(features featuremgmt.FeatureToggles, cfg *setting.Cfg, promR
 		},
 	)
 
-	histogramLabels := []string{"handler", "status_code", "method"}
+	histogramLabels := []string{"handler", "status_code", "method", "status_source", "slo_group"}
+
 	if cfg.MetricsIncludeTeamLabel {
-		histogramLabels = append(histogramLabels, "team")
+		histogramLabels = append(histogramLabels, "grafana_team")
+	}
+
+	histogramOptions := prometheus.HistogramOpts{
+		Namespace: "grafana",
+		Name:      "http_request_duration_seconds",
+		Help:      "Histogram of latencies for HTTP requests.",
+		Buckets:   defBuckets,
+	}
+
+	if features.IsEnabledGlobally(featuremgmt.FlagEnableNativeHTTPHistogram) {
+		// the recommended default value from the prom_client
+		// https://github.com/prometheus/client_golang/blob/main/prometheus/histogram.go#L411
+		// Giving this variable a value means the client will expose a native
+		// histogram.
+		histogramOptions.NativeHistogramBucketFactor = 1.1
+		// The default value in OTel. It probably good enough for us as well.
+		histogramOptions.NativeHistogramMaxBucketNumber = 160
+		histogramOptions.NativeHistogramMinResetDuration = time.Hour
+
+		if features.IsEnabledGlobally(featuremgmt.FlagDisableClassicHTTPHistogram) {
+			// setting Buckets to nil with native options set means the classic
+			// histogram will no longer be exposed - this can be a good way to
+			// reduce cardinality in the exposed metrics
+			histogramOptions.Buckets = nil
+		}
 	}
 
 	httpRequestDurationHistogram := prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "grafana",
-			Name:      "http_request_duration_seconds",
-			Help:      "Histogram of latencies for HTTP requests.",
-			Buckets:   defBuckets,
-		},
+		histogramOptions,
 		histogramLabels,
 	)
 
@@ -73,15 +94,18 @@ func RequestMetrics(features featuremgmt.FeatureToggles, cfg *setting.Cfg, promR
 					handler = "notfound"
 				} else {
 					// log requests where we could not identify handler so we can register them.
-					if features.IsEnabled(featuremgmt.FlagLogRequestsInstrumentedAsUnknown) {
+					if features.IsEnabled(r.Context(), featuremgmt.FlagLogRequestsInstrumentedAsUnknown) {
 						log.Warn("request instrumented as unknown", "path", r.URL.Path, "status_code", status)
 					}
 				}
 			}
 
 			labelValues := []string{handler, code, r.Method}
+			rmd := requestmeta.GetRequestMetaData(r.Context())
+
+			labelValues = append(labelValues, string(rmd.StatusSource), string(rmd.SLOGroup))
+
 			if cfg.MetricsIncludeTeamLabel {
-				rmd := requestmeta.GetRequestMetaData(r.Context())
 				labelValues = append(labelValues, rmd.Team)
 			}
 
@@ -90,16 +114,18 @@ func RequestMetrics(features featuremgmt.FeatureToggles, cfg *setting.Cfg, promR
 			histogram := httpRequestDurationHistogram.
 				WithLabelValues(labelValues...)
 
+			elapsedTime := time.Since(now).Seconds()
+
 			if traceID := tracing.TraceIDFromContext(r.Context(), true); traceID != "" {
 				// Need to type-convert the Observer to an
 				// ExemplarObserver. This will always work for a
 				// HistogramVec.
 				histogram.(prometheus.ExemplarObserver).ObserveWithExemplar(
-					time.Since(now).Seconds(), prometheus.Labels{"traceID": traceID},
+					elapsedTime, prometheus.Labels{"traceID": traceID},
 				)
-				return
+			} else {
+				histogram.Observe(elapsedTime)
 			}
-			histogram.Observe(time.Since(now).Seconds())
 
 			switch {
 			case strings.HasPrefix(r.RequestURI, "/api/datasources/proxy"):

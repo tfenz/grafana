@@ -16,13 +16,19 @@ type CookiePreferences struct {
 	Performance map[string]any `json:"performance,omitempty"`
 }
 
+// NavbarPreference defines model for NavbarPreference.
+type NavbarPreference struct {
+	BookmarkUrls []string `json:"bookmarkUrls"`
+}
+
 // QueryHistoryPreference defines model for QueryHistoryPreference.
 type QueryHistoryPreference struct {
 	// HomeTab one of: '' | 'query' | 'starred';
 	HomeTab *string `json:"homeTab,omitempty"`
 }
 
-// Spec defines model for Spec.
+// Spec defines user, team or org Grafana preferences
+// swagger:model Preferences
 type Spec struct {
 	CookiePreferences *CookiePreferences `json:"cookiePreferences,omitempty"`
 
@@ -31,6 +37,7 @@ type Spec struct {
 
 	// Selected language (beta)
 	Language     *string                 `json:"language,omitempty"`
+	Navbar       *NavbarPreference       `json:"navbar,omitempty"`
 	QueryHistory *QueryHistoryPreference `json:"queryHistory,omitempty"`
 
 	// Theme light, dark, empty is default

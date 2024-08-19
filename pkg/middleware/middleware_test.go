@@ -19,7 +19,6 @@ import (
 	"github.com/grafana/grafana/pkg/services/authn/authntest"
 	"github.com/grafana/grafana/pkg/services/contexthandler"
 	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
-	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/navtree"
 	"github.com/grafana/grafana/pkg/services/user/usertest"
 	"github.com/grafana/grafana/pkg/setting"
@@ -149,9 +148,14 @@ func TestMiddlewareContext(t *testing.T) {
 				User:     &dtos.CurrentUser{},
 				Settings: &dtos.FrontendSettingsDTO{},
 				NavTree:  &navtree.NavTreeRoot{},
+				Assets: &dtos.EntryPointAssets{
+					JSFiles: []dtos.EntryPointAsset{},
+					Dark:    "dark.css",
+					Light:   "light.css",
+				},
 			}
 			t.Log("Calling HTML", "data", data)
-			c.HTML(http.StatusOK, "index-template", data)
+			c.HTML(http.StatusOK, "index", data)
 			t.Log("Returned HTML with code 200")
 		}
 		sc.fakeReq("GET", "/").exec()
@@ -185,6 +189,22 @@ func TestMiddlewareContext(t *testing.T) {
 			"X-Other-Header":  "other-test",
 		}
 	})
+
+	middlewareScenario(t, "middleware should not add Cache-Control header for requests to render pdf", func(
+		t *testing.T, sc *scenarioContext) {
+		sc.fakeReq("GET", "/api/reports/render/pdf/").exec()
+		assert.Empty(t, sc.resp.Header().Get("Cache-Control"))
+		assert.Empty(t, sc.resp.Header().Get("Pragma"))
+		assert.Empty(t, sc.resp.Header().Get("Expires"))
+	})
+
+	middlewareScenario(t, "middleware should not add Cache-Control header for requests to render panel as image", func(
+		t *testing.T, sc *scenarioContext) {
+		sc.fakeReq("GET", "/render/d-solo/").exec()
+		assert.Empty(t, sc.resp.Header().Get("Cache-Control"))
+		assert.Empty(t, sc.resp.Header().Get("Pragma"))
+		assert.Empty(t, sc.resp.Header().Get("Expires"))
+	})
 }
 
 func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(*setting.Cfg)) {
@@ -199,7 +219,7 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 		cfg.LoginCookieName = "grafana_session"
 		cfg.LoginMaxLifetime = loginMaxLifetime
 		// Required when rendering errors
-		cfg.ErrTemplateName = "error-template"
+		cfg.ErrTemplateName = "error"
 		for _, cb := range cbs {
 			cb(cfg)
 		}
@@ -236,7 +256,7 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 				}
 			} else {
 				t.Log("Returning JSON OK")
-				resp := make(map[string]interface{})
+				resp := make(map[string]any)
 				resp["message"] = "OK"
 				c.JSON(http.StatusOK, resp)
 			}
@@ -251,6 +271,6 @@ func middlewareScenario(t *testing.T, desc string, fn scenarioFunc, cbs ...func(
 func getContextHandler(t *testing.T, cfg *setting.Cfg, authnService authn.Service) *contexthandler.ContextHandler {
 	t.Helper()
 
-	tracer := tracing.NewFakeTracer()
-	return contexthandler.ProvideService(cfg, tracer, featuremgmt.WithFeatures(), authnService)
+	tracer := tracing.InitializeTracerForTest()
+	return contexthandler.ProvideService(cfg, tracer, authnService)
 }

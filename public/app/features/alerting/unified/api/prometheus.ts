@@ -2,14 +2,14 @@ import { lastValueFrom } from 'rxjs';
 
 import { getBackendSrv } from '@grafana/runtime';
 import { Matcher } from 'app/plugins/datasource/alertmanager/types';
-import { RuleIdentifier, RuleNamespace } from 'app/types/unified-alerting';
+import { RuleGroup, RuleIdentifier, RuleNamespace } from 'app/types/unified-alerting';
 import { PromRuleGroupDTO, PromRulesResponse } from 'app/types/unified-alerting-dto';
 
 import { getDatasourceAPIUid, GRAFANA_RULES_SOURCE_NAME } from '../utils/datasource';
 import { isCloudRuleIdentifier, isPrometheusRuleIdentifier } from '../utils/rules';
 
 export interface FetchPromRulesFilter {
-  dashboardUID: string;
+  dashboardUID?: string;
   panelId?: number;
 }
 
@@ -37,8 +37,9 @@ export function prometheusUrlBuilder(dataSourceConfig: PrometheusDataSourceConfi
         searchParams.set('rule_group', identifier.groupName);
       }
 
-      const params = prepareRulesFilterQueryParams(searchParams, filter);
+      const filterParams = getRulesFilterSearchParams(filter);
 
+      const params = { ...filterParams, ...Object.fromEntries(searchParams) };
       return {
         url: `/api/prometheus/${getDatasourceAPIUid(dataSourceName)}/api/v1/rules`,
         params: paramsWithMatcherAndState(params, state, matcher),
@@ -47,18 +48,17 @@ export function prometheusUrlBuilder(dataSourceConfig: PrometheusDataSourceConfi
   };
 }
 
-export function prepareRulesFilterQueryParams(
-  params: URLSearchParams,
-  filter?: FetchPromRulesFilter
-): Record<string, string> {
+export function getRulesFilterSearchParams(filter?: FetchPromRulesFilter): Record<string, string> {
+  const filterParams: Record<string, string> = {};
+
   if (filter?.dashboardUID) {
-    params.set('dashboard_uid', filter.dashboardUID);
+    filterParams.dashboard_uid = filter.dashboardUID;
     if (filter?.panelId) {
-      params.set('panel_id', String(filter.panelId));
+      filterParams.panel_id = String(filter.panelId);
     }
   }
 
-  return Object.fromEntries(params);
+  return filterParams;
 }
 
 export function paramsWithMatcherAndState(
@@ -102,7 +102,20 @@ export const groupRulesByFileName = (groups: PromRuleGroupDTO[], dataSourceName:
 
   return Object.values(nsMap);
 };
+export const ungroupRulesByFileName = (namespaces: RuleNamespace[] = []): PromRuleGroupDTO[] => {
+  return namespaces?.flatMap((namespace) =>
+    namespace.groups.flatMap((group) => ruleGroupToPromRuleGroupDTO(group, namespace.name))
+  );
+};
 
+function ruleGroupToPromRuleGroupDTO(group: RuleGroup, namespace: string): PromRuleGroupDTO {
+  return {
+    name: group.name,
+    file: namespace,
+    rules: group.rules,
+    interval: group.interval,
+  };
+}
 export async function fetchRules(
   dataSourceName: string,
   filter?: FetchPromRulesFilter,

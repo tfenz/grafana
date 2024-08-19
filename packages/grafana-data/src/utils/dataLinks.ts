@@ -1,15 +1,10 @@
-import {
-  DataLink,
-  DataQuery,
-  ExplorePanelsState,
-  Field,
-  InternalDataLink,
-  InterpolateFunction,
-  LinkModel,
-  ScopedVars,
-  SplitOpen,
-  TimeRange,
-} from '../types';
+import { ScopedVars } from '../types/ScopedVars';
+import { Field } from '../types/dataFrame';
+import { DataLink, InternalDataLink, LinkModel } from '../types/dataLink';
+import { SplitOpen, ExplorePanelsState } from '../types/explore';
+import { InterpolateFunction } from '../types/panel';
+import { DataQuery } from '../types/query';
+import { TimeRange } from '../types/time';
 
 import { locationUtil } from './location';
 import { serializeStateToUrlParam, toURLRange } from './url';
@@ -45,6 +40,11 @@ export function mapInternalLinkToExplore(options: LinkToExploreOptions): LinkMod
 
   const interpolatedQuery = interpolateObject(link.internal?.query, scopedVars, replaceVariables);
   const interpolatedPanelsState = interpolateObject(link.internal?.panelsState, scopedVars, replaceVariables);
+  const interpolatedCorrelationData = interpolateObject(
+    link.internal?.meta?.correlationData,
+    scopedVars,
+    replaceVariables
+  );
   const title = link.title ? link.title : internalLink.datasourceName;
 
   return {
@@ -57,11 +57,15 @@ export function mapInternalLinkToExplore(options: LinkToExploreOptions): LinkMod
           // Explore data links can be displayed not only in DataLinkButton but it can be used by the consumer in
           // other way, for example MenuItem. We want to provide the URL (for opening in the new tab as well as
           // the onClick to open the split view).
-          event.preventDefault();
+          if (event.preventDefault) {
+            event.preventDefault();
+          }
+
           onClickFn({
             datasourceUid: internalLink.datasourceUid,
             queries: [interpolatedQuery],
             panelsState: interpolatedPanelsState,
+            correlationHelperData: interpolatedCorrelationData,
             range,
           });
         }

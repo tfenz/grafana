@@ -13,11 +13,6 @@ import { StoreState, PluginsState } from 'app/types';
 
 export type PluginTypeCode = 'app' | 'panel' | 'datasource';
 
-export enum PluginListDisplayMode {
-  Grid = 'grid',
-  List = 'list',
-}
-
 export enum PluginAdminRoutes {
   Home = 'plugins-home',
   Browse = 'plugins-browse',
@@ -43,6 +38,9 @@ export interface CatalogPlugin extends WithAccessControlMetadata {
   isEnterprise: boolean;
   isInstalled: boolean;
   isDisabled: boolean;
+  isDeprecated: boolean;
+  isManaged: boolean; // Indicates that the plugin version is managed by Grafana
+  isPreinstalled: { found: boolean; withVersion: boolean }; // Indicates that the plugin is pre-installed
   // `isPublished` is TRUE if the plugin is published to grafana.com
   isPublished: boolean;
   name: string;
@@ -58,6 +56,13 @@ export interface CatalogPlugin extends WithAccessControlMetadata {
   details?: CatalogPluginDetails;
   error?: PluginErrorCode;
   angularDetected?: boolean;
+  // instance plugins may not be fully installed, which means a new instance
+  // running the plugin didn't started yet
+  isFullyInstalled?: boolean;
+  isUninstallingFromInstance?: boolean;
+  isUpdatingFromInstance?: boolean;
+  iam?: IdentityAccessManagement;
+  isProvisioned?: boolean;
 }
 
 export interface CatalogPluginDetails {
@@ -69,6 +74,9 @@ export interface CatalogPluginDetails {
   }>;
   grafanaDependency?: string;
   pluginDependencies?: PluginDependencies['plugins'];
+  statusContext?: string;
+  iam?: IdentityAccessManagement;
+  changelog?: string;
 }
 
 export interface CatalogPluginInfo {
@@ -76,9 +84,11 @@ export interface CatalogPluginInfo {
     large: string;
     small: string;
   };
+  keywords: string[];
 }
 
 export type RemotePlugin = {
+  changelog: string;
   createdAt: string;
   description: string;
   downloads: number;
@@ -86,8 +96,10 @@ export type RemotePlugin = {
   featured: number;
   id: number;
   internal: boolean;
+  keywords: string[];
   json?: {
     dependencies: PluginDependencies;
+    iam?: IdentityAccessManagement;
     info: {
       links: Array<{
         name: string;
@@ -111,7 +123,8 @@ export type RemotePlugin = {
   readme?: string;
   signatureType: PluginSignatureType | '';
   slug: string;
-  status: string;
+  status: RemotePluginStatus;
+  statusContext?: string;
   typeCode: PluginType;
   typeId: number;
   typeName: string;
@@ -126,6 +139,16 @@ export type RemotePlugin = {
   versionStatus: string;
   angularDetected?: boolean;
 };
+
+// The available status codes on GCOM are available here:
+// https://github.com/grafana/grafana-com/blob/main/packages/grafana-com-plugins-api/src/plugins/plugin.model.js#L74
+export enum RemotePluginStatus {
+  Deleted = 'deleted',
+  Active = 'active',
+  Pending = 'pending',
+  Deprecated = 'deprecated',
+  Enterprise = 'enterprise',
+}
 
 export type LocalPlugin = WithAccessControlMetadata & {
   category: string;
@@ -142,6 +165,7 @@ export type LocalPlugin = WithAccessControlMetadata & {
       small: string;
       large: string;
     };
+    keywords: string[];
     build: Build;
     screenshots?: Array<{
       path: string;
@@ -159,7 +183,17 @@ export type LocalPlugin = WithAccessControlMetadata & {
   type: PluginType;
   dependencies: PluginDependencies;
   angularDetected: boolean;
+  iam?: IdentityAccessManagement;
 };
+
+interface IdentityAccessManagement {
+  permissions: Permission[];
+}
+
+export interface Permission {
+  action: string;
+  scope: string;
+}
 
 interface Rel {
   name: string;
@@ -215,6 +249,8 @@ export enum PluginTabLabels {
   CONFIG = 'Config',
   DASHBOARDS = 'Dashboards',
   USAGE = 'Usage',
+  IAM = 'IAM',
+  CHANGELOG = 'Changelog',
 }
 
 export enum PluginTabIds {
@@ -223,6 +259,8 @@ export enum PluginTabIds {
   CONFIG = 'config',
   DASHBOARDS = 'dashboards',
   USAGE = 'usage',
+  IAM = 'iam',
+  CHANGELOG = 'changelog',
 }
 
 export enum RequestStatus {
@@ -252,11 +290,8 @@ export type PluginDetailsTab = {
 
 // TODO<remove `PluginsState &` when the "plugin_admin_enabled" feature flag is removed>
 export type ReducerState = PluginsState & {
-  items: EntityState<CatalogPlugin>;
+  items: EntityState<CatalogPlugin, string>;
   requests: Record<string, RequestInfo>;
-  settings: {
-    displayMode: PluginListDisplayMode;
-  };
 };
 
 // TODO<remove when the "plugin_admin_enabled" feature flag is removed>
@@ -280,4 +315,13 @@ export type PluginVersion = {
   links: Array<{ rel: string; href: string }>;
   isCompatible: boolean;
   grafanaDependency: string | null;
+};
+
+export type InstancePlugin = {
+  pluginSlug: string;
+  version: string;
+};
+
+export type ProvisionedPlugin = {
+  slug: string;
 };

@@ -53,7 +53,7 @@ type service struct {
 	targetToSrv *quota.TargetToSrv
 }
 
-func ProvideService(db db.DB, cfg *setting.Cfg) quota.Service {
+func ProvideService(db db.ReplDB, cfg *setting.Cfg) quota.Service {
 	logger := log.New("quota_service")
 	s := service{
 		store:         &sqlStore{db: db, logger: logger},
@@ -84,7 +84,7 @@ func (s *service) QuotaReached(c *contextmodel.ReqContext, targetSrv quota.Targe
 
 	params := &quota.ScopeParameters{}
 	if c.IsSignedIn {
-		params.OrgID = c.OrgID
+		params.OrgID = c.SignedInUser.GetOrgID()
 		params.UserID = c.UserID
 	}
 	return s.CheckQuotaReached(c.Req.Context(), targetSrv, params)

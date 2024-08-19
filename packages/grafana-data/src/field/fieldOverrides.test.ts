@@ -1,21 +1,17 @@
-import { ArrayDataFrame, createDataFrame, toDataFrame } from '../dataframe';
-import { rangeUtil } from '../datetime';
-import { createTheme } from '../themes';
-import { FieldMatcherID } from '../transformations';
-import {
-  DataFrame,
-  Field,
-  FieldColorModeId,
-  FieldConfig,
-  FieldConfigPropertyItem,
-  FieldConfigSource,
-  FieldType,
-  GrafanaConfig,
-  InterpolateFunction,
-  ScopedVars,
-  ThresholdsMode,
-} from '../types';
-import { locationUtil, Registry } from '../utils';
+import { ArrayDataFrame } from '../dataframe/ArrayDataFrame';
+import { createDataFrame, toDataFrame } from '../dataframe/processDataFrame';
+import { relativeToTimeRange } from '../datetime/rangeutil';
+import { createTheme } from '../themes/createTheme';
+import { FieldMatcherID } from '../transformations/matchers/ids';
+import { ScopedVars } from '../types/ScopedVars';
+import { GrafanaConfig } from '../types/config';
+import { FieldType, DataFrame, Field, FieldConfig } from '../types/dataFrame';
+import { FieldColorModeId } from '../types/fieldColor';
+import { FieldConfigPropertyItem, FieldConfigSource } from '../types/fieldOverrides';
+import { InterpolateFunction } from '../types/panel';
+import { ThresholdsMode } from '../types/thresholds';
+import { Registry } from '../utils/Registry';
+import { locationUtil } from '../utils/location';
 import { mockStandardProperties } from '../utils/tests/mockStandardProperties';
 
 import { FieldConfigOptionsRegistry } from './FieldConfigOptionsRegistry';
@@ -124,7 +120,7 @@ describe('Global MinMax', () => {
     });
   });
 
-  describe('when value values are zeo', () => {
+  describe('when values are zero', () => {
     it('then global min max should be correct', () => {
       const frame = toDataFrame({
         fields: [
@@ -328,6 +324,106 @@ describe('applyFieldOverrides', () => {
 
     // Don't Automatically pick the min value
     expect(range.min).toEqual(-20);
+  });
+
+  it('should calculate min/max per field when fieldMinMax is set', () => {
+    const df = toDataFrame([
+      { title: 'AAA', value: 100, value2: 1234 },
+      { title: 'BBB', value: -20, value2: null },
+      { title: 'CCC', value: 200, value2: 1000 },
+    ]);
+
+    const fieldCfgSource: FieldConfigSource = {
+      defaults: {
+        fieldMinMax: true,
+      },
+      overrides: [],
+    };
+    const data = applyFieldOverrides({
+      data: [df], // the frame
+      fieldConfig: fieldCfgSource,
+      replaceVariables: undefined as unknown as InterpolateFunction,
+      theme: createTheme(),
+      fieldConfigRegistry: customFieldRegistry,
+    })[0];
+
+    const valueColumn1 = data.fields[1];
+    const range1 = valueColumn1.state!.range!;
+    expect(range1.max).toEqual(200);
+    expect(range1.min).toEqual(-20);
+
+    const valueColumn2 = data.fields[2];
+    const range2 = valueColumn2.state!.range!;
+    expect(range2.max).toEqual(1234);
+    expect(range2.min).toEqual(1000);
+  });
+
+  it('should calculate min/max locally for fields with fieldMinMax and globally for other fields', () => {
+    const df = toDataFrame({
+      fields: [
+        { name: 'first', type: FieldType.number, values: [-1, -2] },
+        { name: 'second', type: FieldType.number, values: [1, 2] },
+        { name: 'third', type: FieldType.number, values: [1000, 2000] },
+      ],
+    });
+
+    const fieldCfgSource: FieldConfigSource = {
+      defaults: {},
+      overrides: [
+        {
+          matcher: { id: FieldMatcherID.byName, options: 'second' },
+          properties: [{ id: 'fieldMinMax', value: true }],
+        },
+      ],
+    };
+    const data = applyFieldOverrides({
+      data: [df], // the frame
+      fieldConfig: fieldCfgSource,
+      replaceVariables: undefined as unknown as InterpolateFunction,
+      theme: createTheme(),
+      fieldConfigRegistry: customFieldRegistry,
+    })[0];
+
+    const valueColumn0 = data.fields[0];
+    const range0 = valueColumn0.state!.range!;
+    expect(range0.max).toEqual(2000);
+    expect(range0.min).toEqual(-2);
+
+    const valueColumn1 = data.fields[1];
+    const range1 = valueColumn1.state!.range!;
+    expect(range1.max).toEqual(2);
+    expect(range1.min).toEqual(1);
+
+    const valueColumn2 = data.fields[2];
+    const range2 = valueColumn2.state!.range!;
+    expect(range2.max).toEqual(2000);
+    expect(range2.min).toEqual(-2);
+  });
+
+  it('should not calculate min if min is set', () => {
+    const df = toDataFrame({
+      fields: [{ name: 'first', type: FieldType.number, values: [-1, -2] }],
+    });
+
+    const fieldCfgSource: FieldConfigSource = {
+      defaults: {
+        min: 1,
+        fieldMinMax: true,
+      },
+      overrides: [],
+    };
+    const data = applyFieldOverrides({
+      data: [df], // the frame
+      fieldConfig: fieldCfgSource,
+      replaceVariables: undefined as unknown as InterpolateFunction,
+      theme: createTheme(),
+      fieldConfigRegistry: customFieldRegistry,
+    })[0];
+
+    const valueColumn0 = data.fields[0];
+    const range0 = valueColumn0.state!.range!;
+    expect(range0.max).toEqual(-1);
+    expect(range0.min).toEqual(1);
   });
 
   it('getLinks should use applied field config', () => {
@@ -810,7 +906,7 @@ describe('getLinksSupplier', () => {
     });
 
     const datasourceUid = '1234';
-    const range = rangeUtil.relativeToTimeRange({ from: 600, to: 0 });
+    const range = relativeToTimeRange({ from: 600, to: 0 });
     const f0 = createDataFrame({
       name: 'A',
       fields: [
@@ -871,7 +967,7 @@ describe('getLinksSupplier', () => {
     });
     it('handles link click handlers', () => {
       const onClickSpy = jest.fn();
-      const replaceSpy = jest.fn();
+      const replaceSpy = jest.fn().mockImplementation((value, vars, format) => value);
       const f0 = createDataFrame({
         name: 'A',
         fields: [
@@ -908,8 +1004,8 @@ describe('getLinksSupplier', () => {
 
       links[0].onClick!({});
 
-      expect(onClickSpy).toBeCalledTimes(1);
-      expect(replaceSpy).toBeCalledTimes(4);
+      expect(onClickSpy).toHaveBeenCalledTimes(1);
+      expect(replaceSpy).toHaveBeenCalledTimes(5);
       // check that onClick variable replacer has scoped vars bound to it
       expect(replaceSpy.mock.calls[1][1]).toHaveProperty('foo', { text: 'bar', value: 'bar' });
     });
@@ -956,6 +1052,49 @@ describe('getLinksSupplier', () => {
       // check that onBuildUrl variable replacer has scoped vars bound to it
       expect(replaceSpy.mock.calls[1][1]).toHaveProperty('foo', { text: 'bar', value: 'bar' });
     });
+  });
+
+  it('handles dynamic links with onclick handler', () => {
+    const replaceSpy = jest.fn().mockReturnValue('url interpolated 10');
+    const onClickUrlSpy = jest.fn();
+    const scopedVars = { foo: { text: 'bar', value: 'bar' } };
+    const f0 = createDataFrame({
+      name: 'A',
+      fields: [
+        {
+          name: 'message',
+          type: FieldType.string,
+          config: {
+            links: [
+              {
+                url: 'should be ignored',
+                onClick: (evt) => {
+                  onClickUrlSpy();
+                  evt.replaceVariables?.('${foo}');
+                },
+                title: 'title to be interpolated',
+              },
+              {
+                url: 'should not be ignored',
+                title: 'title to be interpolated',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const supplier = getLinksSupplier(f0, f0.fields[0], scopedVars, replaceSpy);
+    const links = supplier({});
+    links[0].onClick!({});
+
+    expect(onClickUrlSpy).toHaveBeenCalledTimes(1);
+    expect(links.length).toBe(2);
+    expect(links[0].href).toEqual('url interpolated 10');
+    expect(links[0].onClick).toBeDefined();
+    expect(replaceSpy).toHaveBeenCalledTimes(5);
+    // check that onClick variable replacer has scoped vars bound to it
+    expect(replaceSpy.mock.calls[1][1]).toHaveProperty('foo', { text: 'bar', value: 'bar' });
   });
 });
 

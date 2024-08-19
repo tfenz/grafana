@@ -8,7 +8,8 @@ import { Coordinate } from 'ol/coordinate';
 import { isEmpty, getTopLeft, getBottomRight } from 'ol/extent';
 import MouseWheelZoom from 'ol/interaction/MouseWheelZoom';
 import { fromLonLat, toLonLat } from 'ol/proj';
-import React, { Component, ReactNode } from 'react';
+import { Component, ReactNode } from 'react';
+import * as React from 'react';
 import { Subscription } from 'rxjs';
 
 import { DataHoverEvent, InterpolateFunction, PanelData, PanelProps } from '@grafana/data';
@@ -192,8 +193,7 @@ export class GeomapPanel extends Component<Props, State> {
   optionsChanged(options: Options) {
     const oldOptions = this.props.options;
     if (options.view !== oldOptions.view) {
-      const [updatedSharedView, view] = this.initMapView(options.view, sharedView);
-      sharedView = updatedSharedView;
+      const view = this.initMapView(options.view);
 
       if (this.map && view) {
         this.map.setView(view);
@@ -219,7 +219,7 @@ export class GeomapPanel extends Component<Props, State> {
     // Because data changed, check map view and change if needed (data fit)
     const v = centerPointRegistry.getIfExists(this.props.options.view.id);
     if (v && v.id === MapCenterID.Fit) {
-      const [, view] = this.initMapView(this.props.options.view);
+      const view = this.initMapView(this.props.options.view);
 
       if (this.map && view) {
         this.map.setView(view);
@@ -273,7 +273,6 @@ export class GeomapPanel extends Component<Props, State> {
     notifyPanelEditor(this, layers, layers.length - 1);
 
     this.setState({ legends: this.getLegends() });
-    this.addViewMovedListener();
   };
 
   clearTooltip = () => {
@@ -294,7 +293,7 @@ export class GeomapPanel extends Component<Props, State> {
     pointerMoveListener(evt, this);
   };
 
-  initMapView = (config: MapViewConfig, sharedView?: View | undefined): Array<View | undefined> => {
+  initMapView = (config: MapViewConfig): View | undefined => {
     let view = new View({
       center: [0, 0],
       zoom: 1,
@@ -309,9 +308,9 @@ export class GeomapPanel extends Component<Props, State> {
         view = sharedView;
       }
     }
-    this.initViewExtent(view, config);
 
-    return [sharedView, view];
+    this.initViewExtent(view, config);
+    return view;
   };
 
   initViewExtent(view: View, config: MapViewConfig) {
@@ -429,7 +428,14 @@ export class GeomapPanel extends Component<Props, State> {
       <>
         <Global styles={this.globalCSS} />
         <div className={styles.wrap} onMouseLeave={this.clearTooltip}>
-          <div className={styles.map} ref={this.initMapRef}></div>
+          <div
+            role="application"
+            className={styles.map}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0} // Interactivity is added through the ref
+            aria-label={`Navigable map`}
+            ref={this.initMapRef}
+          ></div>
           <GeomapOverlay
             bottomLeft={legends}
             topRight1={topRight1}
@@ -444,15 +450,15 @@ export class GeomapPanel extends Component<Props, State> {
 }
 
 const styles = {
-  wrap: css`
-    position: relative;
-    width: 100%;
-    height: 100%;
-  `,
-  map: css`
-    position: absolute;
-    z-index: 0;
-    width: 100%;
-    height: 100%;
-  `,
+  wrap: css({
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+  }),
+  map: css({
+    position: 'absolute',
+    zIndex: 0,
+    width: '100%',
+    height: '100%',
+  }),
 };

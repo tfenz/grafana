@@ -1,5 +1,5 @@
 import { css } from '@emotion/css';
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { Redirect } from 'react-router-dom';
 import { useLocation } from 'react-use';
 
@@ -12,6 +12,7 @@ import { RuleViewerLayout } from './components/rule-viewer/RuleViewerLayout';
 import { useCloudCombinedRulesMatching } from './hooks/useCombinedRule';
 import { getRulesSourceByName } from './utils/datasource';
 import { createViewLink } from './utils/misc';
+import { unescapePathSeparators } from './utils/rule-id';
 
 const pageTitle = 'Find rule';
 const subUrl = config.appSubUrl;
@@ -27,8 +28,7 @@ function useRuleFindParams() {
 
   return useMemo(() => {
     const segments = location.pathname?.replace(subUrl, '').split('/') ?? []; // ["", "alerting", "{sourceName}", "{name}]
-
-    const name = decodeURIComponent(segments[3]);
+    const name = unescapePathSeparators(decodeURIComponent(unescapePathSeparators(segments[3])));
     const sourceName = decodeURIComponent(segments[2]);
 
     const searchParams = new URLSearchParams(location.search);
@@ -137,19 +137,19 @@ export function RedirectToRuleViewer(): JSX.Element | null {
 
 function getStyles(theme: GrafanaTheme2) {
   return {
-    param: css`
-      font-style: italic;
-      color: ${theme.colors.text.secondary};
-    `,
-    rules: css`
-      margin-top: ${theme.spacing(2)};
-    `,
-    namespace: css`
-      margin-left: ${theme.spacing(1)};
-    `,
-    errorMessage: css`
-      white-space: pre-wrap;
-    `,
+    param: css({
+      fontStyle: 'italic',
+      color: theme.colors.text.secondary,
+    }),
+    rules: css({
+      marginTop: theme.spacing(2),
+    }),
+    namespace: css({
+      marginLeft: theme.spacing(1),
+    }),
+    errorMessage: css({
+      whiteSpace: 'pre-wrap',
+    }),
   };
 }
 

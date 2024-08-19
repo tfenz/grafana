@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React, { ReactNode } from 'react';
+import { ReactNode } from 'react';
 import { Provider } from 'react-redux';
 
+import { selectors } from '@grafana/e2e-selectors';
 import { locationService, setEchoSrv } from '@grafana/runtime';
 import { DataQuery, defaultDashboard } from '@grafana/schema';
 import { backendSrv } from 'app/core/services/backend_srv';
@@ -24,6 +25,11 @@ const setup = (children: ReactNode, queries: DataQuery[] = [{ refId: 'A' }]) => 
     explore: {
       panes: {
         left: {
+          range: {
+            from: 'now-6h',
+            to: 'now',
+            raw: { from: 'now-6h', to: 'now' },
+          },
           queries,
           queryResponse: createEmptyQueryResponse(),
         },
@@ -51,6 +57,18 @@ describe('AddToDashboardButton', () => {
     setEchoSrv(new Echo());
   });
 
+  /* The Add to dashboard form brings in the DashboardPicker, which will call backendSrv.search as part of its instantiation
+  If we do not need a list of dashboards for the test, return an empty array. */
+  beforeEach(() => {
+    // Mock the search response so we don't get any refused connection errors
+    // from this test (as the fetch polyfill means this logic would actually try and call the API)
+    jest.spyOn(backendSrv, 'search').mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('Is disabled if explore pane has no queries', async () => {
     setup(<AddToDashboard exploreId={'left'} />, []);
 
@@ -73,7 +91,7 @@ describe('AddToDashboardButton', () => {
 
     beforeEach(() => {
       jest.spyOn(api, 'setDashboardInLocalStorage').mockReturnValue(addToDashboardResponse);
-      mocks.contextSrv.hasAccess.mockImplementation(() => true);
+      mocks.contextSrv.hasPermission.mockImplementation(() => true);
     });
 
     afterEach(() => {
@@ -220,9 +238,9 @@ describe('AddToDashboardButton', () => {
           await userEvent.click(screen.getByRole('combobox', { name: /dashboard/i }));
 
           await waitFor(async () => {
-            await screen.findByLabelText('Select option');
+            await screen.findByTestId(selectors.components.Select.option);
           });
-          await userEvent.click(screen.getByLabelText('Select option'));
+          await userEvent.click(screen.getByTestId(selectors.components.Select.option));
 
           await userEvent.click(screen.getByRole('button', { name: /open in new tab/i }));
 
@@ -261,9 +279,9 @@ describe('AddToDashboardButton', () => {
           await userEvent.click(screen.getByRole('combobox', { name: /dashboard/i }));
 
           await waitFor(async () => {
-            await screen.findByLabelText('Select option');
+            await screen.findByTestId(selectors.components.Select.option);
           });
-          await userEvent.click(screen.getByLabelText('Select option'));
+          await userEvent.click(screen.getByTestId(selectors.components.Select.option));
 
           await userEvent.click(screen.getByRole('button', { name: /open dashboard$/i }));
 
@@ -283,7 +301,7 @@ describe('AddToDashboardButton', () => {
     });
 
     it('Should only show existing dashboard option with no access to create', async () => {
-      mocks.contextSrv.hasAccess.mockImplementation((action) => {
+      mocks.contextSrv.hasPermission.mockImplementation((action) => {
         if (action === 'dashboards:create') {
           return false;
         } else {
@@ -296,7 +314,7 @@ describe('AddToDashboardButton', () => {
     });
 
     it('Should only show new dashboard option with no access to write', async () => {
-      mocks.contextSrv.hasAccess.mockImplementation((action) => {
+      mocks.contextSrv.hasPermission.mockImplementation((action) => {
         if (action === 'dashboards:write') {
           return false;
         } else {
@@ -311,7 +329,7 @@ describe('AddToDashboardButton', () => {
 
   describe('Error handling', () => {
     beforeEach(() => {
-      mocks.contextSrv.hasAccess.mockImplementation(() => true);
+      mocks.contextSrv.hasPermission.mockImplementation(() => true);
     });
 
     afterEach(() => {
@@ -377,9 +395,9 @@ describe('AddToDashboardButton', () => {
       await userEvent.click(screen.getByRole('combobox', { name: /dashboard/i }));
 
       await waitFor(async () => {
-        await screen.findByLabelText('Select option');
+        await screen.findByTestId(selectors.components.Select.option);
       });
-      await userEvent.click(screen.getByLabelText('Select option'));
+      await userEvent.click(screen.getByTestId(selectors.components.Select.option));
 
       await userEvent.click(screen.getByRole('button', { name: /open in new tab/i }));
 

@@ -1,8 +1,4 @@
-import Mousetrap from 'mousetrap';
-
-import 'mousetrap-global-bind';
-import 'mousetrap/plugins/global-bind/mousetrap-global-bind';
-import { LegacyGraphHoverClearEvent, locationUtil } from '@grafana/data';
+import { LegacyGraphHoverClearEvent, SetPanelAttentionEvent, locationUtil } from '@grafana/data';
 import { LocationService } from '@grafana/runtime';
 import appEvents from 'app/core/app_events';
 import { getExploreUrl } from 'app/core/utils/explore';
@@ -11,7 +7,6 @@ import { ShareModal } from 'app/features/dashboard/components/ShareModal';
 import { DashboardModel } from 'app/features/dashboard/state';
 
 import { getTimeSrv } from '../../features/dashboard/services/TimeSrv';
-import { getDatasourceSrv } from '../../features/plugins/datasource_srv';
 import {
   RemovePanelEvent,
   ShiftTimeEvent,
@@ -19,27 +14,36 @@ import {
   ShowModalReactEvent,
   ZoomOutEvent,
   AbsoluteTimeEvent,
+  CopyTimeEvent,
+  PasteTimeEvent,
 } from '../../types/events';
 import { AppChromeService } from '../components/AppChrome/AppChromeService';
 import { HelpModal } from '../components/help/HelpModal';
 import { contextSrv } from '../core';
 import { RouteDescriptor } from '../navigation/types';
 
+import { mousetrap } from './mousetrap';
 import { toggleTheme } from './theme';
-import { withFocusedPanel } from './withFocusedPanelId';
 
 export class KeybindingSrv {
   constructor(
     private locationService: LocationService,
     private chromeService: AppChromeService
-  ) {}
+  ) {
+    // No cleanup needed, since KeybindingSrv is a singleton
+    appEvents.subscribe(SetPanelAttentionEvent, (event) => {
+      this.panelId = event.payload.panelId;
+    });
+  }
+  /** string for VizPanel key and number for panelId */
+  private panelId: string | number | null = null;
 
   clearAndInitGlobalBindings(route: RouteDescriptor) {
-    Mousetrap.reset();
+    mousetrap.reset();
 
     // Chromeless pages like login and signup page don't get any global bindings
     if (!route.chromeless) {
-      this.bind(['?', 'h'], this.showHelpModal);
+      this.bind('?', this.showHelpModal);
       this.bind('g h', this.goToHome);
       this.bind('g d', this.goToDashboards);
       this.bind('g e', this.goToExplore);
@@ -151,7 +155,7 @@ export class KeybindingSrv {
   }
 
   bind(keyArg: string | string[], fn: () => void) {
-    Mousetrap.bind(
+    mousetrap.bind(
       keyArg,
       (evt) => {
         evt.preventDefault();
@@ -164,7 +168,7 @@ export class KeybindingSrv {
   }
 
   bindGlobal(keyArg: string, fn: () => void) {
-    Mousetrap.bindGlobal(
+    mousetrap.bindGlobal(
       keyArg,
       (evt) => {
         evt.preventDefault();
@@ -177,11 +181,20 @@ export class KeybindingSrv {
   }
 
   unbind(keyArg: string, keyType?: string) {
-    Mousetrap.unbind(keyArg, keyType);
+    mousetrap.unbind(keyArg, keyType);
   }
 
   bindWithPanelId(keyArg: string, fn: (panelId: number) => void) {
-    this.bind(keyArg, withFocusedPanel(fn));
+    this.bind(keyArg, this.withFocusedPanel(fn));
+  }
+
+  withFocusedPanel(fn: (panelId: number) => void) {
+    return () => {
+      if (typeof this.panelId === 'number') {
+        fn(this.panelId);
+        return;
+      }
+    };
   }
 
   setupTimeRangeBindings(updateUrl = true) {
@@ -203,6 +216,14 @@ export class KeybindingSrv {
 
     this.bind('t right', () => {
       appEvents.publish(new ShiftTimeEvent({ direction: ShiftTimeEventDirection.Right, updateUrl }));
+    });
+
+    this.bind('t c', () => {
+      appEvents.publish(new CopyTimeEvent());
+    });
+
+    this.bind('t v', () => {
+      appEvents.publish(new PasteTimeEvent({ updateUrl }));
     });
   }
 
@@ -261,9 +282,10 @@ export class KeybindingSrv {
       this.bindWithPanelId('p x', async (panelId) => {
         const panel = dashboard.getPanelById(panelId)!;
         const url = await getExploreUrl({
-          panel,
-          datasourceSrv: getDatasourceSrv(),
-          timeSrv: getTimeSrv(),
+          queries: panel.targets,
+          dsRef: panel.datasource,
+          scopedVars: panel.scopedVars,
+          timeRange: getTimeSrv().timeRange(),
         });
 
         if (url) {

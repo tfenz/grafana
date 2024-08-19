@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/grafana/pkg/models/roletype"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
-	"github.com/grafana/grafana/pkg/util/errutil"
+	"github.com/grafana/grafana/pkg/apimachinery/errutil"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
+	"github.com/grafana/grafana/pkg/services/search/model"
 )
 
 // Typed errors
@@ -44,13 +44,13 @@ type OrgUser struct {
 	Updated time.Time
 }
 
-type RoleType = roletype.RoleType
+type RoleType = identity.RoleType
 
 const (
-	RoleNone   RoleType = roletype.RoleNone
-	RoleViewer RoleType = roletype.RoleViewer
-	RoleEditor RoleType = roletype.RoleEditor
-	RoleAdmin  RoleType = roletype.RoleAdmin
+	RoleNone   RoleType = identity.RoleNone
+	RoleViewer RoleType = identity.RoleViewer
+	RoleEditor RoleType = identity.RoleEditor
+	RoleAdmin  RoleType = identity.RoleAdmin
 )
 
 type CreateOrgCommand struct {
@@ -178,11 +178,12 @@ type GetOrgUsersQuery struct {
 }
 
 type SearchOrgUsersQuery struct {
-	UserID int64 `xorm:"user_id"`
-	OrgID  int64 `xorm:"org_id"`
-	Query  string
-	Page   int
-	Limit  int
+	UserID   int64 `xorm:"user_id"`
+	OrgID    int64 `xorm:"org_id"`
+	Query    string
+	Page     int
+	Limit    int
+	SortOpts []model.SortOption
 	// Flag used to allow oss edition to query users without access control
 	DontEnforceAccessControl bool
 

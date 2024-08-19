@@ -1,8 +1,6 @@
-import 'whatwg-fetch'; // fetch polyfill
 import { render as rtlRender, screen } from '@testing-library/react';
-import { rest } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { SetupServer, setupServer } from 'msw/node';
-import React from 'react';
 import { TestProvider } from 'test/helpers/TestProvider';
 
 import { contextSrv } from 'app/core/core';
@@ -11,6 +9,7 @@ import { backendSrv } from 'app/core/services/backend_srv';
 
 import BrowseFolderLibraryPanelsPage, { OwnProps } from './BrowseFolderLibraryPanelsPage';
 import { getLibraryElementsResponse } from './fixtures/libraryElements.fixture';
+import * as permissions from './permissions';
 
 function render(...[ui, options]: Parameters<typeof rtlRender>) {
   rtlRender(<TestProvider>{ui}</TestProvider>, options);
@@ -34,28 +33,31 @@ const mockLibraryElementsResponse = getLibraryElementsResponse(1, {
 describe('browse-dashboards BrowseFolderLibraryPanelsPage', () => {
   let props: OwnProps;
   let server: SetupServer;
+  const mockPermissions = {
+    canCreateDashboards: true,
+    canEditDashboards: true,
+    canCreateFolders: true,
+    canDeleteFolders: true,
+    canEditFolders: true,
+    canViewPermissions: true,
+    canSetPermissions: true,
+  };
 
   beforeAll(() => {
     server = setupServer(
-      rest.get('/api/folders/:uid', (_, res, ctx) => {
-        return res(
-          ctx.status(200),
-          ctx.json({
-            title: mockFolderName,
-            uid: mockFolderUid,
-          })
-        );
+      http.get('/api/folders/:uid', () => {
+        return HttpResponse.json({
+          title: mockFolderName,
+          uid: mockFolderUid,
+        });
       }),
-      rest.get('/api/library-elements', (_, res, ctx) => {
-        return res(
-          ctx.status(200),
-          ctx.json({
-            result: mockLibraryElementsResponse,
-          })
-        );
+      http.get('/api/library-elements', () => {
+        return HttpResponse.json({
+          result: mockLibraryElementsResponse,
+        });
       }),
-      rest.get('/api/search/sorting', (_, res, ctx) => {
-        return res(ctx.status(200), ctx.json({}));
+      http.get('/api/search/sorting', () => {
+        return HttpResponse.json({});
       })
     );
     server.listen();
@@ -66,6 +68,7 @@ describe('browse-dashboards BrowseFolderLibraryPanelsPage', () => {
   });
 
   beforeEach(() => {
+    jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => mockPermissions);
     jest.spyOn(contextSrv, 'hasPermission').mockReturnValue(true);
     props = {
       ...getRouteComponentProps({
@@ -97,7 +100,15 @@ describe('browse-dashboards BrowseFolderLibraryPanelsPage', () => {
   });
 
   it('does not display the "Folder actions" button if the user does not have permissions', async () => {
-    jest.spyOn(contextSrv, 'hasPermission').mockReturnValue(false);
+    jest.spyOn(permissions, 'getFolderPermissions').mockImplementation(() => {
+      return {
+        ...mockPermissions,
+        canDeleteFolders: false,
+        canEditFolders: false,
+        canViewPermissions: false,
+        canSetPermissions: false,
+      };
+    });
     render(<BrowseFolderLibraryPanelsPage {...props} />);
     expect(await screen.findByRole('heading', { name: mockFolderName })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Folder actions' })).not.toBeInTheDocument();
@@ -105,14 +116,14 @@ describe('browse-dashboards BrowseFolderLibraryPanelsPage', () => {
 
   it('displays all the folder tabs and shows the "Library panels" tab as selected', async () => {
     render(<BrowseFolderLibraryPanelsPage {...props} />);
-    expect(await screen.findByRole('tab', { name: 'Tab Dashboards' })).toBeInTheDocument();
-    expect(await screen.findByRole('tab', { name: 'Tab Dashboards' })).toHaveAttribute('aria-selected', 'false');
+    expect(await screen.findByRole('tab', { name: 'Dashboards' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Dashboards' })).toHaveAttribute('aria-selected', 'false');
 
-    expect(await screen.findByRole('tab', { name: 'Tab Panels' })).toBeInTheDocument();
-    expect(await screen.findByRole('tab', { name: 'Tab Panels' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: 'Panels' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Panels' })).toHaveAttribute('aria-selected', 'true');
 
-    expect(await screen.findByRole('tab', { name: 'Tab Alert rules' })).toBeInTheDocument();
-    expect(await screen.findByRole('tab', { name: 'Tab Alert rules' })).toHaveAttribute('aria-selected', 'false');
+    expect(await screen.findByRole('tab', { name: 'Alert rules' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Alert rules' })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('displays the library panels returned by the API', async () => {

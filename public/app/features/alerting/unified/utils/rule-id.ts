@@ -1,3 +1,6 @@
+import { nth } from 'lodash';
+
+import { locationService } from '@grafana/runtime';
 import { CombinedRule, Rule, RuleIdentifier, RuleWithLocation } from 'app/types/unified-alerting';
 import { Annotations, Labels, RulerRuleDTO } from 'app/types/unified-alerting-dto';
 
@@ -106,11 +109,11 @@ function unescapeDollars(value: string): string {
  * we'll use some non-printable characters from the ASCII table that will get encoded properly but very unlikely
  * to ever be used in a rule name or namespace
  */
-function escapePathSeparators(value: string): string {
+export function escapePathSeparators(value: string): string {
   return value.replace(/\//g, '\x1f').replace(/\\/g, '\x1e');
 }
 
-function unescapePathSeparators(value: string): string {
+export function unescapePathSeparators(value: string): string {
   return value.replace(/\x1f/g, '/').replace(/\x1e/g, '\\');
 }
 
@@ -218,7 +221,7 @@ export function hashRulerRule(rule: RulerRuleDTO): string {
   }
 }
 
-function hashRule(rule: Rule): string {
+export function hashRule(rule: Rule): string {
   if (isRecordingRule(rule)) {
     return hash(JSON.stringify([rule.type, rule.query, hashLabelsOrAnnotations(rule.labels)])).toString();
   }
@@ -237,10 +240,24 @@ function hashRule(rule: Rule): string {
   throw new Error('only recording and alerting rules can be hashed');
 }
 
-function hashLabelsOrAnnotations(item: Labels | Annotations | undefined): string {
+export function hashLabelsOrAnnotations(item: Labels | Annotations | undefined): string {
   return JSON.stringify(Object.entries(item || {}).sort((a, b) => a[0].localeCompare(b[0])));
 }
 
 export function ruleIdentifierToRuleSourceName(identifier: RuleIdentifier): string {
   return isGrafanaRuleIdentifier(identifier) ? GRAFANA_RULES_SOURCE_NAME : identifier.ruleSourceName;
+}
+
+// DO NOT USE REACT-ROUTER HOOKS FOR THIS CODE
+// React-router's useLocation/useParams/props.match are broken and don't preserve original param values when parsing location
+// so, they cannot be used to parse name and sourceName path params
+// React-router messes the pathname up resulting in a string that is neither encoded nor decoded
+// Relevant issue: https://github.com/remix-run/history/issues/505#issuecomment-453175833
+// It was probably fixed in React-Router v6
+type PathWithOptionalID = { id?: string };
+export function getRuleIdFromPathname(params: PathWithOptionalID): string | undefined {
+  const { pathname = '' } = locationService.getLocation();
+  const { id } = params;
+
+  return id ? nth(pathname.split('/'), -2) : undefined;
 }

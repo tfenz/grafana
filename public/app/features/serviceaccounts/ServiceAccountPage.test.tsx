@@ -1,7 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { History, Location } from 'history';
-import React from 'react';
 import { TestProvider } from 'test/helpers/TestProvider';
 
 import { RouteDescriptor } from 'app/core/navigation/types';
@@ -13,8 +12,7 @@ jest.mock('app/core/core', () => ({
   contextSrv: {
     licensedAccessControlEnabled: () => false,
     hasPermission: () => true,
-    hasPermissionInMetadata: () => true,
-    hasAccessInMetadata: () => false,
+    hasPermissionInMetadata: () => false,
   },
 }));
 

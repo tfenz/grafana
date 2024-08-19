@@ -3,7 +3,7 @@ package provisioning
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,35 +11,49 @@ import (
 	alertingNotify "github.com/grafana/alerting/notify"
 	"github.com/prometheus/alertmanager/config"
 
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 	"github.com/grafana/grafana/pkg/infra/log"
-	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	apimodels "github.com/grafana/grafana/pkg/services/ngalert/api/tooling/definitions"
 	"github.com/grafana/grafana/pkg/services/ngalert/models"
 	"github.com/grafana/grafana/pkg/services/ngalert/notifier/channels_config"
+	"github.com/grafana/grafana/pkg/services/ngalert/notifier/legacy_storage"
+	"github.com/grafana/grafana/pkg/services/ngalert/store"
 	"github.com/grafana/grafana/pkg/services/secrets"
-	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/util"
 )
 
-type ContactPointService struct {
-	amStore           AMConfigStore
-	encryptionService secrets.Service
-	provenanceStore   ProvisioningStore
-	xact              TransactionManager
-	log               log.Logger
-	ac                accesscontrol.AccessControl
+type AlertRuleNotificationSettingsStore interface {
+	RenameReceiverInNotificationSettings(ctx context.Context, orgID int64, oldReceiver, newReceiver string) (int, error)
+	RenameTimeIntervalInNotificationSettings(ctx context.Context, orgID int64, oldTimeInterval, newTimeInterval string, validateProvenance func(models.Provenance) bool, dryRun bool) ([]models.AlertRuleKey, []models.AlertRuleKey, error)
+	ListNotificationSettings(ctx context.Context, q models.ListNotificationSettingsQuery) (map[models.AlertRuleKey][]models.NotificationSettings, error)
 }
 
-func NewContactPointService(store AMConfigStore, encryptionService secrets.Service,
-	provenanceStore ProvisioningStore, xact TransactionManager, log log.Logger, ac accesscontrol.AccessControl) *ContactPointService {
+type ContactPointService struct {
+	configStore               alertmanagerConfigStore
+	encryptionService         secrets.Service
+	provenanceStore           ProvisioningStore
+	notificationSettingsStore AlertRuleNotificationSettingsStore
+	xact                      TransactionManager
+	receiverService           receiverService
+	log                       log.Logger
+}
+
+type receiverService interface {
+	GetReceivers(ctx context.Context, query models.GetReceiversQuery, user identity.Requester) ([]apimodels.GettableApiReceiver, error)
+}
+
+func NewContactPointService(store alertmanagerConfigStore, encryptionService secrets.Service,
+	provenanceStore ProvisioningStore, xact TransactionManager, receiverService receiverService, log log.Logger,
+	nsStore AlertRuleNotificationSettingsStore) *ContactPointService {
 	return &ContactPointService{
-		amStore:           store,
-		encryptionService: encryptionService,
-		provenanceStore:   provenanceStore,
-		xact:              xact,
-		log:               log,
-		ac:                ac,
+		configStore:               store,
+		receiverService:           receiverService,
+		encryptionService:         encryptionService,
+		provenanceStore:           provenanceStore,
+		xact:                      xact,
+		log:                       log,
+		notificationSettingsStore: nsStore,
 	}
 }
 
@@ -51,69 +65,39 @@ type ContactPointQuery struct {
 	Decrypt bool
 }
 
-func (ecp *ContactPointService) canDecryptSecrets(ctx context.Context, u *user.SignedInUser) bool {
-	if u == nil {
-		return false
-	}
-	permitted, err := ecp.ac.Evaluate(ctx, u, accesscontrol.EvalPermission(accesscontrol.ActionAlertingProvisioningReadSecrets))
-	if err != nil {
-		ecp.log.Error("Failed to evaluate user permissions", "error", err)
-		permitted = false
-	}
-	return permitted
-}
-
 // GetContactPoints returns contact points. If q.Decrypt is true and the user is an OrgAdmin, decrypted secure settings are included instead of redacted ones.
-func (ecp *ContactPointService) GetContactPoints(ctx context.Context, q ContactPointQuery, u *user.SignedInUser) ([]apimodels.EmbeddedContactPoint, error) {
-	if q.Decrypt && !ecp.canDecryptSecrets(ctx, u) {
-		return nil, fmt.Errorf("%w: user requires Admin role or alert.provisioning.secrets:read permission to view decrypted secure settings", ErrPermissionDenied)
+func (ecp *ContactPointService) GetContactPoints(ctx context.Context, q ContactPointQuery, u identity.Requester) ([]apimodels.EmbeddedContactPoint, error) {
+	receiverQuery := models.GetReceiversQuery{
+		OrgID:   q.OrgID,
+		Decrypt: q.Decrypt,
 	}
-	revision, err := getLastConfiguration(ctx, q.OrgID, ecp.amStore)
-	if err != nil {
-		return nil, err
+	if q.Name != "" {
+		receiverQuery.Names = []string{q.Name}
 	}
-	provenances, err := ecp.provenanceStore.GetProvenances(ctx, q.OrgID, "contactPoint")
-	if err != nil {
-		return nil, err
-	}
-	contactPoints := []apimodels.EmbeddedContactPoint{}
-	for _, contactPoint := range revision.cfg.GetGrafanaReceiverMap() {
-		if q.Name != "" && contactPoint.Name != q.Name {
-			continue
-		}
 
-		simpleJson, err := simplejson.NewJson(contactPoint.Settings)
+	res, err := ecp.receiverService.GetReceivers(ctx, receiverQuery, u)
+	if err != nil {
+		return nil, convertRecSvcErr(err)
+	}
+	grafanaReceivers := []*apimodels.GettableGrafanaReceiver{}
+	if q.Name != "" && len(res) > 0 {
+		grafanaReceivers = res[0].GettableGrafanaReceivers.GrafanaManagedReceivers // we only expect one receiver group
+	} else {
+		for _, r := range res {
+			grafanaReceivers = append(grafanaReceivers, r.GettableGrafanaReceivers.GrafanaManagedReceivers...)
+		}
+	}
+
+	contactPoints := make([]apimodels.EmbeddedContactPoint, len(grafanaReceivers))
+	for i, gr := range grafanaReceivers {
+		contactPoint, err := GettableGrafanaReceiverToEmbeddedContactPoint(gr)
 		if err != nil {
 			return nil, err
 		}
-		embeddedContactPoint := apimodels.EmbeddedContactPoint{
-			UID:                   contactPoint.UID,
-			Type:                  contactPoint.Type,
-			Name:                  contactPoint.Name,
-			DisableResolveMessage: contactPoint.DisableResolveMessage,
-			Settings:              simpleJson,
-		}
-		if val, exists := provenances[embeddedContactPoint.UID]; exists && val != "" {
-			embeddedContactPoint.Provenance = string(val)
-		}
-		for k, v := range contactPoint.SecureSettings {
-			decryptedValue, err := ecp.decryptValue(v)
-			if err != nil {
-				ecp.log.Warn("decrypting value failed", "error", err.Error())
-				continue
-			}
-			if decryptedValue == "" {
-				continue
-			}
-			if q.Decrypt {
-				embeddedContactPoint.Settings.Set(k, decryptedValue)
-			} else {
-				embeddedContactPoint.Settings.Set(k, apimodels.RedactedValue)
-			}
-		}
 
-		contactPoints = append(contactPoints, embeddedContactPoint)
+		contactPoints[i] = contactPoint
 	}
+
 	sort.SliceStable(contactPoints, func(i, j int) bool {
 		switch strings.Compare(contactPoints[i].Name, contactPoints[j].Name) {
 		case -1:
@@ -123,41 +107,28 @@ func (ecp *ContactPointService) GetContactPoints(ctx context.Context, q ContactP
 		}
 		return contactPoints[i].UID < contactPoints[j].UID
 	})
+
 	return contactPoints, nil
 }
 
 // getContactPointDecrypted is an internal-only function that gets full contact point info, included encrypted fields.
 // nil is returned if no matching contact point exists.
 func (ecp *ContactPointService) getContactPointDecrypted(ctx context.Context, orgID int64, uid string) (apimodels.EmbeddedContactPoint, error) {
-	revision, err := getLastConfiguration(ctx, orgID, ecp.amStore)
+	revision, err := ecp.configStore.Get(ctx, orgID)
 	if err != nil {
 		return apimodels.EmbeddedContactPoint{}, err
 	}
-	for _, receiver := range revision.cfg.GetGrafanaReceiverMap() {
+	for _, receiver := range revision.Config.GetGrafanaReceiverMap() {
 		if receiver.UID != uid {
 			continue
 		}
-		simpleJson, err := simplejson.NewJson(receiver.Settings)
+		embeddedContactPoint, err := PostableGrafanaReceiverToEmbeddedContactPoint(
+			receiver,
+			models.ProvenanceNone, // TODO should be correct provenance?
+			ecp.decryptValueOrRedacted(true, receiver.UID),
+		)
 		if err != nil {
 			return apimodels.EmbeddedContactPoint{}, err
-		}
-		embeddedContactPoint := apimodels.EmbeddedContactPoint{
-			UID:                   receiver.UID,
-			Type:                  receiver.Type,
-			Name:                  receiver.Name,
-			DisableResolveMessage: receiver.DisableResolveMessage,
-			Settings:              simpleJson,
-		}
-		for k, v := range receiver.SecureSettings {
-			decryptedValue, err := ecp.decryptValue(v)
-			if err != nil {
-				ecp.log.Warn("decrypting value failed", "error", err.Error())
-				continue
-			}
-			if decryptedValue == "" {
-				continue
-			}
-			embeddedContactPoint.Settings.Set(k, decryptedValue)
 		}
 		return embeddedContactPoint, nil
 	}
@@ -170,7 +141,7 @@ func (ecp *ContactPointService) CreateContactPoint(ctx context.Context, orgID in
 		return apimodels.EmbeddedContactPoint{}, fmt.Errorf("%w: %s", ErrValidation, err.Error())
 	}
 
-	revision, err := getLastConfiguration(ctx, orgID, ecp.amStore)
+	revision, err := ecp.configStore.Get(ctx, orgID)
 	if err != nil {
 		return apimodels.EmbeddedContactPoint{}, err
 	}
@@ -190,6 +161,8 @@ func (ecp *ContactPointService) CreateContactPoint(ctx context.Context, orgID in
 
 	if contactPoint.UID == "" {
 		contactPoint.UID = util.GenerateShortUID()
+	} else if err := util.ValidateUID(contactPoint.UID); err != nil {
+		return apimodels.EmbeddedContactPoint{}, errors.Join(ErrValidation, fmt.Errorf("cannot create contact point with UID '%s': %w", contactPoint.UID, err))
 	}
 
 	jsonData, err := contactPoint.Settings.MarshalJSON()
@@ -207,7 +180,7 @@ func (ecp *ContactPointService) CreateContactPoint(ctx context.Context, orgID in
 	}
 
 	receiverFound := false
-	for _, receiver := range revision.cfg.AlertmanagerConfig.Receivers {
+	for _, receiver := range revision.Config.AlertmanagerConfig.Receivers {
 		// check if uid is already used in receiver
 		for _, rec := range receiver.PostableGrafanaReceivers.GrafanaManagedReceivers {
 			if grafanaReceiver.UID == rec.UID {
@@ -224,7 +197,7 @@ func (ecp *ContactPointService) CreateContactPoint(ctx context.Context, orgID in
 	}
 
 	if !receiverFound {
-		revision.cfg.AlertmanagerConfig.Receivers = append(revision.cfg.AlertmanagerConfig.Receivers, &apimodels.PostableApiReceiver{
+		revision.Config.AlertmanagerConfig.Receivers = append(revision.Config.AlertmanagerConfig.Receivers, &apimodels.PostableApiReceiver{
 			Receiver: config.Receiver{
 				Name: grafanaReceiver.Name,
 			},
@@ -234,28 +207,11 @@ func (ecp *ContactPointService) CreateContactPoint(ctx context.Context, orgID in
 		})
 	}
 
-	data, err := json.Marshal(revision.cfg)
-	if err != nil {
-		return apimodels.EmbeddedContactPoint{}, err
-	}
-
 	err = ecp.xact.InTransaction(ctx, func(ctx context.Context) error {
-		err = PersistConfig(ctx, ecp.amStore, &models.SaveAlertmanagerConfigurationCmd{
-			AlertmanagerConfiguration: string(data),
-			FetchedConfigurationHash:  revision.concurrencyToken,
-			ConfigurationVersion:      revision.version,
-			Default:                   false,
-			OrgID:                     orgID,
-		})
-		if err != nil {
+		if err := ecp.configStore.Save(ctx, revision, orgID); err != nil {
 			return err
 		}
-		err = ecp.provenanceStore.SetProvenance(ctx, &contactPoint, orgID, provenance)
-		if err != nil {
-			return err
-		}
-		contactPoint.Provenance = string(provenance)
-		return nil
+		return ecp.provenanceStore.SetProvenance(ctx, &contactPoint, orgID, provenance)
 	})
 	if err != nil {
 		return apimodels.EmbeddedContactPoint{}, err
@@ -275,7 +231,7 @@ func (ecp *ContactPointService) UpdateContactPoint(ctx context.Context, orgID in
 	if err != nil {
 		return err
 	}
-	secretKeys, err := GetSecretKeysForContactPointType(contactPoint.Type)
+	secretKeys, err := channels_config.GetSecretKeysForContactPointType(contactPoint.Type)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrValidation, err.Error())
 	}
@@ -325,42 +281,39 @@ func (ecp *ContactPointService) UpdateContactPoint(ctx context.Context, orgID in
 		SecureSettings:        extractedSecrets,
 	}
 	// save to store
-	revision, err := getLastConfiguration(ctx, orgID, ecp.amStore)
+	revision, err := ecp.configStore.Get(ctx, orgID)
 	if err != nil {
 		return err
 	}
 
-	configModified := stitchReceiver(revision.cfg, mergedReceiver)
+	configModified, renamedReceiver := stitchReceiver(revision.Config, mergedReceiver)
 	if !configModified {
 		return fmt.Errorf("contact point with uid '%s' not found", mergedReceiver.UID)
 	}
 
-	data, err := json.Marshal(revision.cfg)
+	err = ecp.xact.InTransaction(ctx, func(ctx context.Context) error {
+		if err := ecp.configStore.Save(ctx, revision, orgID); err != nil {
+			return err
+		}
+		if renamedReceiver != "" && renamedReceiver != mergedReceiver.Name {
+			affected, err := ecp.notificationSettingsStore.RenameReceiverInNotificationSettings(ctx, orgID, renamedReceiver, mergedReceiver.Name)
+			if err != nil {
+				return err
+			}
+			if affected > 0 {
+				ecp.log.Info("Renamed receiver in notification settings", "oldName", renamedReceiver, "newName", mergedReceiver.Name, "affectedSettings", affected)
+			}
+		}
+		return ecp.provenanceStore.SetProvenance(ctx, &contactPoint, orgID, provenance)
+	})
 	if err != nil {
 		return err
 	}
-	return ecp.xact.InTransaction(ctx, func(ctx context.Context) error {
-		err = PersistConfig(ctx, ecp.amStore, &models.SaveAlertmanagerConfigurationCmd{
-			AlertmanagerConfiguration: string(data),
-			FetchedConfigurationHash:  revision.concurrencyToken,
-			ConfigurationVersion:      revision.version,
-			Default:                   false,
-			OrgID:                     orgID,
-		})
-		if err != nil {
-			return err
-		}
-		err = ecp.provenanceStore.SetProvenance(ctx, &contactPoint, orgID, provenance)
-		if err != nil {
-			return err
-		}
-		contactPoint.Provenance = string(provenance)
-		return nil
-	})
+	return nil
 }
 
 func (ecp *ContactPointService) DeleteContactPoint(ctx context.Context, orgID int64, uid string) error {
-	revision, err := getLastConfiguration(ctx, orgID, ecp.amStore)
+	revision, err := ecp.configStore.Get(ctx, orgID)
 	if err != nil {
 		return err
 	}
@@ -371,7 +324,7 @@ func (ecp *ContactPointService) DeleteContactPoint(ctx context.Context, orgID in
 	// Name of the contact point that will be removed, might be used if a
 	// full removal is done to check if it's referenced in any route.
 	name := ""
-	for i, receiver := range revision.cfg.AlertmanagerConfig.Receivers {
+	for i, receiver := range revision.Config.AlertmanagerConfig.Receivers {
 		for j, grafanaReceiver := range receiver.GrafanaManagedReceivers {
 			if grafanaReceiver.UID == uid {
 				name = grafanaReceiver.Name
@@ -379,64 +332,63 @@ func (ecp *ContactPointService) DeleteContactPoint(ctx context.Context, orgID in
 				// if this was the last receiver we removed, we remove the whole receiver
 				if len(receiver.GrafanaManagedReceivers) == 0 {
 					fullRemoval = true
-					revision.cfg.AlertmanagerConfig.Receivers = append(revision.cfg.AlertmanagerConfig.Receivers[:i], revision.cfg.AlertmanagerConfig.Receivers[i+1:]...)
+					revision.Config.AlertmanagerConfig.Receivers = append(revision.Config.AlertmanagerConfig.Receivers[:i], revision.Config.AlertmanagerConfig.Receivers[i+1:]...)
 				}
 				break
 			}
 		}
 	}
-	if fullRemoval && isContactPointInUse(name, []*apimodels.Route{revision.cfg.AlertmanagerConfig.Route}) {
-		return fmt.Errorf("contact point '%s' is currently used by a notification policy", name)
+	if fullRemoval && revision.ReceiverNameUsedByRoutes(name) {
+		return ErrContactPointReferenced.Errorf("")
 	}
-	data, err := json.Marshal(revision.cfg)
-	if err != nil {
-		return err
-	}
+
 	return ecp.xact.InTransaction(ctx, func(ctx context.Context) error {
+		if fullRemoval {
+			used, err := ecp.notificationSettingsStore.ListNotificationSettings(ctx, models.ListNotificationSettingsQuery{OrgID: orgID, ReceiverName: name})
+			if err != nil {
+				return fmt.Errorf("failed to query alert rules for reference to the contact point '%s': %w", name, err)
+			}
+			if len(used) > 0 {
+				uids := make([]string, 0, len(used))
+				for key := range used {
+					uids = append(uids, key.UID)
+				}
+				ecp.log.Error("Cannot delete contact point because it is used in rule's notification settings", "receiverName", name, "rulesUid", strings.Join(uids, ","))
+				return ErrContactPointUsedInRule.Errorf("")
+			}
+		}
+
+		if err := ecp.configStore.Save(ctx, revision, orgID); err != nil {
+			return err
+		}
 		target := &apimodels.EmbeddedContactPoint{
 			UID: uid,
 		}
-		err := ecp.provenanceStore.DeleteProvenance(ctx, target, orgID)
-		if err != nil {
-			return err
-		}
-		return PersistConfig(ctx, ecp.amStore, &models.SaveAlertmanagerConfigurationCmd{
-			AlertmanagerConfiguration: string(data),
-			FetchedConfigurationHash:  revision.concurrencyToken,
-			ConfigurationVersion:      revision.version,
-			Default:                   false,
-			OrgID:                     orgID,
-		})
+		return ecp.provenanceStore.DeleteProvenance(ctx, target, orgID)
 	})
 }
 
-func isContactPointInUse(name string, routes []*apimodels.Route) bool {
-	if len(routes) == 0 {
-		return false
-	}
-	for _, route := range routes {
-		if route.Receiver == name {
-			return true
+// decryptValueOrRedacted returns a function that decodes a string from Base64 and then decrypts using secrets.Service.
+// If argument 'decrypt' is false, then returns definitions.RedactedValue regardless of the decrypted value.
+// Otherwise, it returns the decoded and decrypted value. The function returns empty string in the case of errors, which are logged
+func (ecp *ContactPointService) decryptValueOrRedacted(decrypt bool, integrationUID string) func(v string) string {
+	return func(value string) string {
+		decodeValue, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			ecp.log.Warn("Failed to decode secret value from Base64", "error", err.Error(), "integrationUid", integrationUID)
+			return ""
 		}
-		if isContactPointInUse(name, route.Routes) {
-			return true
+		decryptedValue, err := ecp.encryptionService.Decrypt(context.Background(), decodeValue)
+		if err != nil {
+			ecp.log.Warn("Failed to decrypt secret value", "error", err.Error(), "integrationUid", integrationUID)
+			return ""
+		}
+		if decrypt {
+			return string(decryptedValue)
+		} else {
+			return apimodels.RedactedValue
 		}
 	}
-	return false
-}
-
-func (ecp *ContactPointService) decryptValue(value string) (string, error) {
-	decodeValue, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-
-	decryptedValue, err := ecp.encryptionService.Decrypt(context.Background(), decodeValue)
-	if err != nil {
-		return "", err
-	}
-
-	return string(decryptedValue), nil
 }
 
 func (ecp *ContactPointService) encryptValue(value string) (string, error) {
@@ -447,14 +399,16 @@ func (ecp *ContactPointService) encryptValue(value string) (string, error) {
 	return base64.StdEncoding.EncodeToString(encryptedData), nil
 }
 
-// stitchReceiver modifies a receiver, target, in an alertmanager config. It modifies the given config in-place.
-// Returns true if the config was altered in any way, and false otherwise.
-func stitchReceiver(cfg *apimodels.PostableUserConfig, target *apimodels.PostableGrafanaReceiver) bool {
+// stitchReceiver modifies a receiver, target, in an alertmanager configStore. It modifies the given configStore in-place.
+// Returns true if the configStore was altered in any way, and false otherwise.
+// If integration was moved to another group and it was the last in the previous group, the second parameter contains the name of the old group that is gone
+func stitchReceiver(cfg *apimodels.PostableUserConfig, target *apimodels.PostableGrafanaReceiver) (bool, string) {
 	// Algorithm to fix up receivers. Receivers are very complex and depend heavily on internal consistency.
 	// All receivers in a given receiver group have the same name. We must maintain this across renames.
 	configModified := false
+	renamedReceiver := ""
 groupLoop:
-	for _, receiverGroup := range cfg.AlertmanagerConfig.Receivers {
+	for groupIdx, receiverGroup := range cfg.AlertmanagerConfig.Receivers {
 		// Does the current group contain the grafana receiver we're interested in?
 		for i, grafanaReceiver := range receiverGroup.GrafanaManagedReceivers {
 			if grafanaReceiver.UID == target.UID {
@@ -477,8 +431,7 @@ groupLoop:
 					replaceReferences(receiverGroup.Name, target.Name, cfg.AlertmanagerConfig.Route)
 					receiverGroup.Name = target.Name
 					receiverGroup.GrafanaManagedReceivers[i] = target
-					configModified = true
-					break groupLoop
+					renamedReceiver = receiverGroup.Name
 				}
 
 				// Otherwise, we only want to rename the receiver we are touching... NOT all of them.
@@ -491,6 +444,11 @@ groupLoop:
 						// Add the modified receiver to the new group...
 						candidateExistingGroup.GrafanaManagedReceivers = append(candidateExistingGroup.GrafanaManagedReceivers, target)
 						configModified = true
+
+						// if the old receiver group turns out to be empty. Remove it.
+						if len(receiverGroup.GrafanaManagedReceivers) == 0 {
+							cfg.AlertmanagerConfig.Receivers = append(cfg.AlertmanagerConfig.Receivers[:groupIdx], cfg.AlertmanagerConfig.Receivers[groupIdx+1:]...)
+						}
 						break groupLoop
 					}
 				}
@@ -515,7 +473,7 @@ groupLoop:
 		}
 	}
 
-	return configModified
+	return configModified, renamedReceiver
 }
 
 func replaceReferences(oldName, newName string, routes ...*apimodels.Route) {
@@ -552,34 +510,51 @@ func ValidateContactPoint(ctx context.Context, e apimodels.EmbeddedContactPoint,
 	return nil
 }
 
-// GetSecretKeysForContactPointType returns settings keys of contact point of the given type that are expected to be secrets. Returns error is contact point type is not known.
-func GetSecretKeysForContactPointType(contactPointType string) ([]string, error) {
-	notifiers := channels_config.GetAvailableNotifiers()
-	for _, n := range notifiers {
-		if n.Type == contactPointType {
-			var secureFields []string
-			for _, field := range n.Options {
-				if field.Secure {
-					secureFields = append(secureFields, field.PropertyName)
-				}
-			}
-			return secureFields, nil
-		}
-	}
-	return nil, fmt.Errorf("no secrets configured for type '%s'", contactPointType)
-}
-
 // RemoveSecretsForContactPoint removes all secrets from the contact point's settings and returns them as a map. Returns error if contact point type is not known.
 func RemoveSecretsForContactPoint(e *apimodels.EmbeddedContactPoint) (map[string]string, error) {
 	s := map[string]string{}
-	secretKeys, err := GetSecretKeysForContactPointType(e.Type)
+	secretKeys, err := channels_config.GetSecretKeysForContactPointType(e.Type)
 	if err != nil {
 		return nil, err
 	}
 	for _, secretKey := range secretKeys {
-		secretValue := e.Settings.Get(secretKey).MustString()
-		e.Settings.Del(secretKey)
+		foundSecretKey, secretValue, err := getCaseInsensitive(e.Settings, secretKey)
+		if err != nil {
+			return nil, err
+		}
+		e.Settings.Del(foundSecretKey)
 		s[secretKey] = secretValue
 	}
 	return s, nil
+}
+
+// getCaseInsensitive returns the value of the specified key, preferring an exact match but accepting a case-insensitive match.
+// If no key matches, the second return value is an empty string.
+func getCaseInsensitive(jsonObj *simplejson.Json, key string) (string, string, error) {
+	// Check for an exact key match first.
+	if value, ok := jsonObj.CheckGet(key); ok {
+		return key, value.MustString(), nil
+	}
+
+	// If no exact match is found, look for a case-insensitive match.
+	settingsMap, err := jsonObj.Map()
+	if err != nil {
+		return "", "", err
+	}
+
+	for k, v := range settingsMap {
+		if strings.EqualFold(k, key) {
+			return k, v.(string), nil
+		}
+	}
+
+	return key, "", nil
+}
+
+// convertRecSvcErr converts errors from notifier.ReceiverService to errors expected from ContactPointService.
+func convertRecSvcErr(err error) error {
+	if errors.Is(err, store.ErrNoAlertmanagerConfiguration) {
+		return legacy_storage.ErrNoAlertmanagerConfiguration.Errorf("")
+	}
+	return err
 }

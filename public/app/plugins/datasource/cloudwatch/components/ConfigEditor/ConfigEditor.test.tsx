@@ -1,24 +1,25 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
-import { Provider } from 'react-redux';
 
 import { AwsAuthType } from '@grafana/aws-sdk';
 import { PluginContextProvider, PluginMeta, PluginMetaInfo, PluginType } from '@grafana/data';
-import { configureStore } from 'app/store/configureStore';
 
-import { CloudWatchSettings, setupMockedDataSource } from '../../__mocks__/CloudWatchDataSource';
+import {
+  CloudWatchSettings,
+  setupMockedDataSource,
+  setupMockedTemplateService,
+} from '../../__mocks__/CloudWatchDataSource';
 import { CloudWatchDatasource } from '../../datasource';
 
-import { ConfigEditor, Props } from './ConfigEditor';
+import {
+  ConfigEditor,
+  Props,
+  ARN_DEPRECATION_WARNING_MESSAGE,
+  CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE,
+} from './ConfigEditor';
 
-const datasource = new CloudWatchDatasource(CloudWatchSettings);
+const datasource = new CloudWatchDatasource(CloudWatchSettings, setupMockedTemplateService());
 const loadDataSourceMock = jest.fn();
-jest.mock('app/features/plugins/datasource_srv', () => ({
-  getDatasourceSrv: () => ({
-    loadDatasource: loadDataSourceMock,
-  }),
-}));
 
 jest.mock('./XrayLinkConfig', () => ({
   XrayLinkConfig: () => <></>,
@@ -35,10 +36,16 @@ jest.mock('@grafana/runtime', () => ({
     put: putMock,
     get: getMock,
   }),
+  getDataSourceSrv: () => ({
+    get: loadDataSourceMock,
+  }),
   getAppEvents: () => mockAppEvents,
   config: {
     ...jest.requireActual('@grafana/runtime').config,
     awsAssumeRoleEnabled: true,
+    featureToggles: {
+      cloudWatchCrossAccountQuerying: true,
+    },
   },
 }));
 
@@ -83,7 +90,6 @@ const props: Props = {
 };
 
 const setup = (optionOverrides?: Partial<Props['options']>) => {
-  const store = configureStore();
   const newProps = {
     ...props,
     options: {
@@ -102,9 +108,7 @@ const setup = (optionOverrides?: Partial<Props['options']>) => {
 
   return render(
     <PluginContextProvider meta={meta}>
-      <Provider store={store}>
-        <ConfigEditor {...newProps} />
-      </Provider>
+      <ConfigEditor {...newProps} />
     </PluginContextProvider>
   );
 };
@@ -140,7 +144,44 @@ describe('Render', () => {
         authType: AwsAuthType.Credentials,
       },
     });
-    await waitFor(async () => expect(screen.getByLabelText('Credentials Profile Name')).toBeInTheDocument());
+    await waitFor(async () => expect(screen.getByText('Credentials Profile Name')).toBeInTheDocument());
+  });
+
+  it('should show a warning if `credentials` auth type is used without a profile or database configured', async () => {
+    setup({
+      jsonData: {
+        authType: AwsAuthType.Credentials,
+        profile: undefined,
+        database: undefined,
+      },
+    });
+    await waitFor(async () => expect(screen.getByText(CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE)).toBeInTheDocument());
+  });
+
+  it('should not show a warning if `credentials` auth type is used and a profile is configured', async () => {
+    setup({
+      jsonData: {
+        authType: AwsAuthType.Credentials,
+        profile: 'profile',
+        database: undefined,
+      },
+    });
+    await waitFor(async () =>
+      expect(screen.queryByText(CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE)).not.toBeInTheDocument()
+    );
+  });
+
+  it('should not show a warning if `credentials` auth type is used and a database is configured', async () => {
+    setup({
+      jsonData: {
+        authType: AwsAuthType.Credentials,
+        profile: undefined,
+        database: 'database',
+      },
+    });
+    await waitFor(async () =>
+      expect(screen.queryByText(CREDENTIALS_AUTHENTICATION_WARNING_MESSAGE)).not.toBeInTheDocument()
+    );
   });
 
   it('should show access key and secret access key fields when the datasource has not been configured before', async () => {
@@ -161,12 +202,26 @@ describe('Render', () => {
         authType: AwsAuthType.ARN,
       },
     });
-    await waitFor(async () => expect(screen.getByLabelText('Assume Role ARN')).toBeInTheDocument());
+    await waitFor(async () => expect(screen.getByText('Assume Role ARN')).toBeInTheDocument());
+  });
+
+  it('should display namespace field', async () => {
+    setup();
+    await waitFor(async () => expect(screen.getByText('Namespaces of Custom Metrics')).toBeInTheDocument());
+  });
+
+  it('should show a deprecation warning if `arn` auth type is used', async () => {
+    setup({
+      jsonData: {
+        authType: AwsAuthType.ARN,
+      },
+    });
+    await waitFor(async () => expect(screen.getByText(ARN_DEPRECATION_WARNING_MESSAGE)).toBeInTheDocument());
   });
 
   it('should display log group selector field', async () => {
     setup();
-    await waitFor(async () => expect(await screen.getByText('Select log groups')).toBeInTheDocument());
+    await waitFor(async () => expect(screen.getByText('Select log groups')).toBeInTheDocument());
   });
 
   it('should only display the first two default log groups and show all of them when clicking "Show all" button', async () => {
@@ -204,9 +259,7 @@ describe('Render', () => {
   });
 
   it('should show error message if Select log group button is clicked when data source is never saved', async () => {
-    const SAVED_VERSION = undefined;
-    setup({ version: SAVED_VERSION });
-
+    setup({ version: 1 });
     await waitFor(() => expect(screen.getByText('Select log groups')).toBeInTheDocument());
     await userEvent.click(screen.getByText('Select log groups'));
     await waitFor(() =>
@@ -265,12 +318,11 @@ describe('Render', () => {
   });
 
   it('should open log group selector if Select log group button is clicked when data source has saved changes', async () => {
-    const SAVED_VERSION = undefined;
     const newProps = {
       ...props,
       options: {
         ...props.options,
-        version: SAVED_VERSION,
+        version: 1,
       },
     };
     const meta: PluginMeta = {
@@ -291,7 +343,7 @@ describe('Render', () => {
       ...newProps,
       options: {
         ...newProps.options,
-        version: 1,
+        version: 2,
       },
     };
     rerender(

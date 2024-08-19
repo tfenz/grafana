@@ -1,9 +1,9 @@
 import { getByLabelText, render as rtlRender, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import React from 'react';
 import { TestProvider } from 'test/helpers/TestProvider';
 
 import { selectors } from '@grafana/e2e-selectors';
+import { DashboardViewItem } from 'app/features/search/types';
 
 import { wellFormedTree } from '../fixtures/dashboardsTreeItem.fixture';
 
@@ -47,10 +47,10 @@ describe('browse-dashboards BrowseView', () => {
     render(<BrowseView canSelect folderUID={undefined} width={WIDTH} height={HEIGHT} />);
     await screen.findByText(folderA.item.title);
 
-    await expandFolder(folderA.item.uid);
+    await expandFolder(folderA.item);
     expect(screen.queryByText(folderA_folderA.item.title)).toBeInTheDocument();
 
-    await collapseFolder(folderA.item.uid);
+    await collapseFolder(folderA.item);
     expect(screen.queryByText(folderA_folderA.item.title)).not.toBeInTheDocument();
   });
 
@@ -69,8 +69,8 @@ describe('browse-dashboards BrowseView', () => {
     await screen.findByText(folderA.item.title);
 
     // First expand then click folderA
-    await expandFolder(folderA.item.uid);
-    await clickCheckbox(folderA.item.uid);
+    await expandFolder(folderA.item);
+    await clickCheckbox(folderA.item);
 
     // All the visible items in it should be checked now
     const directChildren = mockTree.filter((v) => v.item.kind !== 'ui' && v.item.parentUID === folderA.item.uid);
@@ -86,12 +86,12 @@ describe('browse-dashboards BrowseView', () => {
     await screen.findByText(folderA.item.title);
 
     // First expand then click folderA
-    await expandFolder(folderA.item.uid);
-    await clickCheckbox(folderA.item.uid);
+    await expandFolder(folderA.item);
+    await clickCheckbox(folderA.item);
 
     // When additional children are loaded (by expanding a folder), those items
     // should also be selected
-    await expandFolder(folderA_folderB.item.uid);
+    await expandFolder(folderA_folderB.item);
 
     const grandchildren = mockTree.filter((v) => v.item.kind !== 'ui' && v.item.parentUID === folderA_folderB.item.uid);
 
@@ -105,11 +105,11 @@ describe('browse-dashboards BrowseView', () => {
     render(<BrowseView canSelect folderUID={undefined} width={WIDTH} height={HEIGHT} />);
     await screen.findByText(folderA.item.title);
 
-    await expandFolder(folderA.item.uid);
-    await expandFolder(folderA_folderB.item.uid);
+    await expandFolder(folderA.item);
+    await expandFolder(folderA_folderB.item);
 
-    await clickCheckbox(folderA.item.uid);
-    await clickCheckbox(folderA_folderB_dashbdB.item.uid);
+    await clickCheckbox(folderA.item);
+    await clickCheckbox(folderA_folderB_dashbdB.item);
 
     const itemCheckbox = screen.queryByTestId(
       selectors.pages.BrowseDashboards.table.checkbox(folderA_folderB_dashbdB.item.uid)
@@ -129,10 +129,10 @@ describe('browse-dashboards BrowseView', () => {
     render(<BrowseView canSelect={true} folderUID={undefined} width={WIDTH} height={HEIGHT} />);
     await screen.findByText(folderA.item.title);
 
-    await expandFolder(folderA.item.uid);
-    await expandFolder(folderA_folderB.item.uid);
+    await expandFolder(folderA.item);
+    await expandFolder(folderA_folderB.item);
 
-    await clickCheckbox(folderA_folderB_dashbdB.item.uid);
+    await clickCheckbox(folderA_folderB_dashbdB.item);
 
     const parentCheckbox = screen.queryByTestId(
       selectors.pages.BrowseDashboards.table.checkbox(folderA_folderB.item.uid)
@@ -148,7 +148,7 @@ describe('browse-dashboards BrowseView', () => {
   describe('when there is no item in the folder', () => {
     it('shows a CTA for creating a dashboard if the user has editor rights', async () => {
       render(<BrowseView canSelect={true} folderUID={folderB_empty.item.uid} width={WIDTH} height={HEIGHT} />);
-      expect(await screen.findByText('Create Dashboard')).toBeInTheDocument();
+      expect(await screen.findByText('Create dashboard')).toBeInTheDocument();
     });
 
     it('shows a simple message if the user has viewer rights', async () => {
@@ -158,19 +158,19 @@ describe('browse-dashboards BrowseView', () => {
   });
 });
 
-async function expandFolder(uid: string) {
-  const row = screen.getByTestId(selectors.pages.BrowseDashboards.table.row(uid));
+async function expandFolder(item: DashboardViewItem) {
+  const row = screen.getByTestId(selectors.pages.BrowseDashboards.table.row(item.title));
   const expandButton = getByLabelText(row, /Expand folder/);
   await userEvent.click(expandButton);
 }
 
-async function collapseFolder(uid: string) {
-  const row = screen.getByTestId(selectors.pages.BrowseDashboards.table.row(uid));
+async function collapseFolder(item: DashboardViewItem) {
+  const row = screen.getByTestId(selectors.pages.BrowseDashboards.table.row(item.title));
   const expandButton = getByLabelText(row, /Collapse folder/);
   await userEvent.click(expandButton);
 }
 
-async function clickCheckbox(uid: string) {
-  const checkbox = screen.getByTestId(selectors.pages.BrowseDashboards.table.checkbox(uid));
+async function clickCheckbox(item: DashboardViewItem) {
+  const checkbox = screen.getByTestId(selectors.pages.BrowseDashboards.table.checkbox(item.uid));
   await userEvent.click(checkbox);
 }

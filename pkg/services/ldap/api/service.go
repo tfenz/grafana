@@ -29,7 +29,8 @@ import (
 )
 
 type Service struct {
-	cfg                  *setting.Cfg
+	cfg                  *ldap.Config
+	adminUser            string
 	userService          user.Service
 	authInfoService      login.AuthInfoService
 	ldapGroupsService    ldap.Groups
@@ -47,7 +48,8 @@ func ProvideService(
 	sessionService auth.UserTokenService, bundleRegistry supportbundles.Service,
 ) *Service {
 	s := &Service{
-		cfg:                  cfg,
+		cfg:                  ldap.GetLDAPConfig(cfg),
+		adminUser:            cfg.AdminUser,
 		userService:          userService,
 		authInfoService:      authInfoService,
 		ldapGroupsService:    ldapGroupsService,
@@ -96,7 +98,7 @@ func ProvideService(
 // 403: forbiddenError
 // 500: internalServerError
 func (s *Service) ReloadLDAPCfg(c *contextmodel.ReqContext) response.Response {
-	if !s.cfg.LDAPAuthEnabled {
+	if !s.cfg.Enabled {
 		return response.Error(http.StatusBadRequest, "LDAP is not enabled", nil)
 	}
 
@@ -122,7 +124,7 @@ func (s *Service) ReloadLDAPCfg(c *contextmodel.ReqContext) response.Response {
 // 403: forbiddenError
 // 500: internalServerError
 func (s *Service) GetLDAPStatus(c *contextmodel.ReqContext) response.Response {
-	if !s.cfg.LDAPAuthEnabled {
+	if !s.cfg.Enabled {
 		return response.Error(http.StatusBadRequest, "LDAP is not enabled", nil)
 	}
 
@@ -169,7 +171,7 @@ func (s *Service) GetLDAPStatus(c *contextmodel.ReqContext) response.Response {
 // 403: forbiddenError
 // 500: internalServerError
 func (s *Service) PostSyncUserWithLDAP(c *contextmodel.ReqContext) response.Response {
-	if !s.cfg.LDAPAuthEnabled {
+	if !s.cfg.Enabled {
 		return response.Error(http.StatusBadRequest, "LDAP is not enabled", nil)
 	}
 
@@ -197,22 +199,23 @@ func (s *Service) PostSyncUserWithLDAP(c *contextmodel.ReqContext) response.Resp
 	authModuleQuery := &login.GetAuthInfoQuery{UserId: usr.ID, AuthModule: login.LDAPAuthModule}
 	if _, err := s.authInfoService.GetAuthInfo(c.Req.Context(), authModuleQuery); err != nil { // validate the userId comes from LDAP
 		if errors.Is(err, user.ErrUserNotFound) {
-			return response.Error(404, user.ErrUserNotFound.Error(), nil)
+			return response.Error(http.StatusNotFound, user.ErrUserNotFound.Error(), nil)
 		}
 
-		return response.Error(500, "Failed to get user", err)
+		return response.Error(http.StatusInternalServerError, "Failed to get user", err)
 	}
 
 	userInfo, _, err := ldapClient.User(usr.Login)
 	if err != nil {
 		if errors.Is(err, multildap.ErrDidNotFindUser) { // User was not in the LDAP server - we need to take action:
-			if s.cfg.AdminUser == usr.Login { // User is *the* Grafana Admin. We cannot disable it.
+			if s.adminUser == usr.Login { // User is *the* Grafana Admin. We cannot disable it.
 				errMsg := fmt.Sprintf(`Refusing to sync grafana super admin "%s" - it would be disabled`, usr.Login)
 				s.log.Error(errMsg)
 				return response.Error(http.StatusBadRequest, errMsg, err)
 			}
 
-			if err := s.userService.Disable(c.Req.Context(), &user.DisableUserCommand{IsDisabled: true, UserID: usr.ID}); err != nil {
+			isDisabled := true
+			if err := s.userService.Update(c.Req.Context(), &user.UpdateUserCommand{UserID: usr.ID, IsDisabled: &isDisabled}); err != nil {
 				return response.Error(http.StatusInternalServerError, "Failed to disable the user", err)
 			}
 
@@ -249,7 +252,7 @@ func (s *Service) PostSyncUserWithLDAP(c *contextmodel.ReqContext) response.Resp
 // 403: forbiddenError
 // 500: internalServerError
 func (s *Service) GetUserFromLDAP(c *contextmodel.ReqContext) response.Response {
-	if !s.cfg.LDAPAuthEnabled {
+	if !s.cfg.Enabled {
 		return response.Error(http.StatusBadRequest, "LDAP is not enabled", nil)
 	}
 
@@ -302,7 +305,7 @@ func (s *Service) GetUserFromLDAP(c *contextmodel.ReqContext) response.Response 
 		u.OrgRoles = append(u.OrgRoles, LDAPRoleDTO{GroupDN: userGroup})
 	}
 
-	s.log.Debug("mapping org roles", "orgsRoles", u.OrgRoles)
+	s.log.Debug("Mapping org roles", "orgsRoles", u.OrgRoles)
 	if err := u.fetchOrgs(c.Req.Context(), s.orgService); err != nil {
 		return response.Error(http.StatusBadRequest, "An organization was not found - Please verify your LDAP configuration", err)
 	}
@@ -326,14 +329,11 @@ func (s *Service) identityFromLDAPUser(user *login.ExternalUserInfo) *authn.Iden
 		AuthID:          user.AuthId,
 		Groups:          user.Groups,
 		ClientParams: authn.ClientParams{
-			SyncUser:            true,
-			SyncTeams:           true,
-			EnableDisabledUsers: true,
-			SyncOrgRoles:        !s.cfg.LDAPSkipOrgRoleSync,
-			AllowSignUp:         s.cfg.LDAPAllowSignup,
-			LookUpParams: login.UserLookupParams{
-				UserID: &user.UserId,
-			},
+			SyncUser:     true,
+			SyncTeams:    true,
+			EnableUser:   true,
+			SyncOrgRoles: !s.cfg.SkipOrgRoleSync,
+			AllowSignUp:  s.cfg.AllowSignUp,
 		},
 	}
 }

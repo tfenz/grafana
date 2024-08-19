@@ -1,6 +1,6 @@
 import { css } from '@emotion/css';
 import { noop } from 'lodash';
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Draggable, { DraggableBounds } from 'react-draggable';
 
 import { Threshold, GrafanaTheme2 } from '@grafana/data';
@@ -48,7 +48,7 @@ export const ThresholdDragHandle = ({
   }
 
   const disabled = typeof onChange !== 'function';
-  const styles = useStyles2((theme) => getStyles(theme, step, outOfBounds, disabled));
+  const styles = useStyles2(getStyles, step, outOfBounds, disabled);
   const [currentValue, setCurrentValue] = useState(step.value);
 
   const textColor = useMemo(() => {

@@ -2,24 +2,29 @@ package process
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/grafana/grafana/pkg/plugins"
 )
 
-type Service struct{}
+const defaultKeepPluginAliveTickerDuration = time.Second
 
-func ProvideService() *Service {
-	return &Service{}
+type Service struct {
+	keepPluginAliveTickerDuration time.Duration
 }
 
-func (*Service) Start(ctx context.Context, p *plugins.Plugin) error {
-	if !p.IsManaged() || !p.Backend || p.SignatureError != nil {
+func ProvideService() *Service {
+	return &Service{
+		keepPluginAliveTickerDuration: defaultKeepPluginAliveTickerDuration,
+	}
+}
+
+func (s *Service) Start(ctx context.Context, p *plugins.Plugin) error {
+	if !p.IsManaged() || !p.Backend || p.Error != nil {
 		return nil
 	}
 
-	if err := startPluginAndRestartKilledProcesses(ctx, p); err != nil {
+	if err := s.startPluginAndKeepItAlive(ctx, p); err != nil {
 		return err
 	}
 
@@ -40,7 +45,7 @@ func (*Service) Stop(ctx context.Context, p *plugins.Plugin) error {
 	return nil
 }
 
-func startPluginAndRestartKilledProcesses(ctx context.Context, p *plugins.Plugin) error {
+func (s *Service) startPluginAndKeepItAlive(ctx context.Context, p *plugins.Plugin) error {
 	if err := p.Start(ctx); err != nil {
 		return err
 	}
@@ -49,41 +54,35 @@ func startPluginAndRestartKilledProcesses(ctx context.Context, p *plugins.Plugin
 		return nil
 	}
 
-	go func(ctx context.Context, p *plugins.Plugin) {
-		if err := restartKilledProcess(ctx, p); err != nil {
+	go func(p *plugins.Plugin) {
+		if err := s.keepPluginAlive(p); err != nil {
 			p.Logger().Error("Attempt to restart killed plugin process failed", "error", err)
 		}
-	}(ctx, p)
+	}(p)
 
 	return nil
 }
 
-func restartKilledProcess(ctx context.Context, p *plugins.Plugin) error {
-	ticker := time.NewTicker(time.Second * 1)
+// keepPluginAlive will restart the plugin if the process is killed or exits
+func (s *Service) keepPluginAlive(p *plugins.Plugin) error {
+	ticker := time.NewTicker(s.keepPluginAliveTickerDuration)
 
 	for {
-		select {
-		case <-ctx.Done():
-			if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
-				return err
-			}
-			return p.Stop(ctx)
-		case <-ticker.C:
-			if p.IsDecommissioned() {
-				p.Logger().Debug("Plugin decommissioned")
-				return nil
-			}
-
-			if !p.Exited() {
-				continue
-			}
-
-			p.Logger().Debug("Restarting plugin")
-			if err := p.Start(ctx); err != nil {
-				p.Logger().Error("Failed to restart plugin", "error", err)
-				continue
-			}
-			p.Logger().Debug("Plugin restarted")
+		<-ticker.C
+		if p.IsDecommissioned() {
+			p.Logger().Debug("Plugin decommissioned")
+			return nil
 		}
+
+		if !p.Exited() {
+			continue
+		}
+
+		p.Logger().Debug("Restarting plugin")
+		if err := p.Start(context.Background()); err != nil {
+			p.Logger().Error("Failed to restart plugin", "error", err)
+			continue
+		}
+		p.Logger().Debug("Plugin restarted")
 	}
 }

@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { History, Location } from 'history';
-import React from 'react';
 import { type match } from 'react-router-dom';
 import { TestProvider } from 'test/helpers/TestProvider';
 
@@ -32,7 +31,7 @@ async function getTestContext({ name, interval, items, uid }: Partial<Playlist> 
   const location = {} as Location;
   const history = {} as History;
   const getMock = jest.spyOn(backendSrv, 'get');
-  const putMock = jest.spyOn(backendSrv, 'put');
+  const putMock = jest.spyOn(backendSrv, 'put').mockImplementation(() => Promise.resolve());
 
   getMock.mockResolvedValue({
     name: 'Test Playlist',
@@ -76,6 +75,7 @@ describe('PlaylistEditPage', () => {
       fireEvent.submit(screen.getByRole('button', { name: /save/i }));
       await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
       expect(putMock).toHaveBeenCalledWith('/api/playlists/foo', {
+        uid: 'foo',
         name: 'A Name',
         interval: '10s',
         items: [{ title: 'First item', type: 'dashboard_by_uid', order: 1, value: '1' }],

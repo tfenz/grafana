@@ -156,8 +156,8 @@ func publishPackages(cfg packaging.PublishConfig) error {
 	pth = path.Join(pth, product)
 	baseArchiveURL := fmt.Sprintf("https://dl.grafana.com/%s", pth)
 
-	var builds []buildRepr
-	for _, ba := range packaging.ArtifactConfigs {
+	builds := make([]buildRepr, len(packaging.ArtifactConfigs))
+	for i, ba := range packaging.ArtifactConfigs {
 		u := ba.GetURL(baseArchiveURL, cfg)
 
 		sha256, err := getSHA256(u)
@@ -165,12 +165,12 @@ func publishPackages(cfg packaging.PublishConfig) error {
 			return err
 		}
 
-		builds = append(builds, buildRepr{
+		builds[i] = buildRepr{
 			OS:     ba.Os,
 			URL:    u,
 			SHA256: string(sha256),
 			Arch:   ba.Arch,
-		})
+		}
 	}
 
 	r := releaseRepr{
@@ -232,7 +232,7 @@ func getSHA256(u string) ([]byte, error) {
 	return sha256, nil
 }
 
-func postRequest(cfg packaging.PublishConfig, pth string, obj interface{}, descr string) error {
+func postRequest(cfg packaging.PublishConfig, pth string, obj any, descr string) error {
 	var sfx string
 	switch cfg.Edition {
 	case config.EditionOSS:

@@ -1,5 +1,4 @@
 import { css } from '@emotion/css';
-import React from 'react';
 import { useCopyToClipboard } from 'react-use';
 
 import { Field, GrafanaTheme2 } from '@grafana/data/';
@@ -101,7 +100,7 @@ const RawListItem = ({ listItemData, listKey, totalNumberOfValues, valueLabels, 
   const { __name__, ...allLabels } = listItemData;
   const [_, copyToClipboard] = useCopyToClipboard();
   const displayLength = valueLabels?.length ?? totalNumberOfValues;
-  const styles = useStyles2((theme) => getStyles(theme, displayLength, isExpandedView));
+  const styles = useStyles2(getStyles, displayLength, isExpandedView);
   const { values, attributeValues } = getQueryValues(allLabels);
 
   /**

@@ -3,24 +3,24 @@ package actest
 import (
 	"context"
 
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
-	"github.com/grafana/grafana/pkg/services/auth/identity"
 )
 
 var _ accesscontrol.Service = new(FakeService)
 var _ accesscontrol.RoleRegistry = new(FakeService)
 
 type FakeService struct {
+	accesscontrol.Service
 	ExpectedErr                     error
-	ExpectedDisabled                bool
 	ExpectedCachedPermissions       bool
 	ExpectedPermissions             []accesscontrol.Permission
 	ExpectedFilteredUserPermissions []accesscontrol.Permission
 	ExpectedUsersPermissions        map[int64][]accesscontrol.Permission
 }
 
-func (f FakeService) GetUsageStats(ctx context.Context) map[string]interface{} {
-	return map[string]interface{}{}
+func (f FakeService) GetUsageStats(ctx context.Context) map[string]any {
+	return map[string]any{}
 }
 
 func (f FakeService) GetUserPermissions(ctx context.Context, user identity.Requester, options accesscontrol.Options) ([]accesscontrol.Permission, error) {
@@ -41,16 +41,16 @@ func (f FakeService) DeleteUserPermissions(ctx context.Context, orgID, userID in
 	return f.ExpectedErr
 }
 
+func (f FakeService) DeleteTeamPermissions(ctx context.Context, orgID, teamID int64) error {
+	return f.ExpectedErr
+}
+
 func (f FakeService) DeclareFixedRoles(registrations ...accesscontrol.RoleRegistration) error {
 	return f.ExpectedErr
 }
 
 func (f FakeService) RegisterFixedRoles(ctx context.Context) error {
 	return f.ExpectedErr
-}
-
-func (f FakeService) IsDisabled() bool {
-	return f.ExpectedDisabled
 }
 
 func (f FakeService) SaveExternalServiceRole(ctx context.Context, cmd accesscontrol.SaveExternalServiceRoleCommand) error {
@@ -65,7 +65,6 @@ var _ accesscontrol.AccessControl = new(FakeAccessControl)
 
 type FakeAccessControl struct {
 	ExpectedErr      error
-	ExpectedDisabled bool
 	ExpectedEvaluate bool
 }
 
@@ -76,19 +75,25 @@ func (f FakeAccessControl) Evaluate(ctx context.Context, user identity.Requester
 func (f FakeAccessControl) RegisterScopeAttributeResolver(prefix string, resolver accesscontrol.ScopeAttributeResolver) {
 }
 
-func (f FakeAccessControl) IsDisabled() bool {
-	return f.ExpectedDisabled
-}
-
 type FakeStore struct {
-	ExpectedUserPermissions  []accesscontrol.Permission
-	ExpectedUsersPermissions map[int64][]accesscontrol.Permission
-	ExpectedUsersRoles       map[int64][]string
-	ExpectedErr              error
+	ExpectedUserPermissions       []accesscontrol.Permission
+	ExpectedBasicRolesPermissions []accesscontrol.Permission
+	ExpectedTeamsPermissions      map[int64][]accesscontrol.Permission
+	ExpectedUsersPermissions      map[int64][]accesscontrol.Permission
+	ExpectedUsersRoles            map[int64][]string
+	ExpectedErr                   error
 }
 
 func (f FakeStore) GetUserPermissions(ctx context.Context, query accesscontrol.GetUserPermissionsQuery) ([]accesscontrol.Permission, error) {
 	return f.ExpectedUserPermissions, f.ExpectedErr
+}
+
+func (f FakeStore) GetBasicRolesPermissions(ctx context.Context, query accesscontrol.GetUserPermissionsQuery) ([]accesscontrol.Permission, error) {
+	return f.ExpectedBasicRolesPermissions, f.ExpectedErr
+}
+
+func (f FakeStore) GetTeamsPermissions(ctx context.Context, query accesscontrol.GetUserPermissionsQuery) (map[int64][]accesscontrol.Permission, error) {
+	return f.ExpectedTeamsPermissions, f.ExpectedErr
 }
 
 func (f FakeStore) SearchUsersPermissions(ctx context.Context, orgID int64, options accesscontrol.SearchOptions) (map[int64][]accesscontrol.Permission, error) {
@@ -100,6 +105,10 @@ func (f FakeStore) GetUsersBasicRoles(ctx context.Context, userFilter []int64, o
 }
 
 func (f FakeStore) DeleteUserPermissions(ctx context.Context, orgID, userID int64) error {
+	return f.ExpectedErr
+}
+
+func (f FakeStore) DeleteTeamPermissions(ctx context.Context, orgID, teamID int64) error {
 	return f.ExpectedErr
 }
 

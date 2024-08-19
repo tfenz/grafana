@@ -8,7 +8,7 @@ import (
 	"github.com/grafana/grafana/pkg/plugins/manager/loader/assetpath"
 )
 
-type pluginFactoryFunc func(p plugins.FoundPlugin, pluginClass plugins.Class, sig plugins.Signature) (*plugins.Plugin, error)
+type pluginFactoryFunc func(p *plugins.FoundBundle, pluginClass plugins.Class, sig plugins.Signature) (*plugins.Plugin, error)
 
 // DefaultPluginFactory is the default plugin factory used by the Construct step of the Bootstrap stage.
 //
@@ -23,54 +23,78 @@ func NewDefaultPluginFactory(assetPath *assetpath.Service) *DefaultPluginFactory
 	return &DefaultPluginFactory{assetPath: assetPath}
 }
 
-func (f *DefaultPluginFactory) createPlugin(p plugins.FoundPlugin, class plugins.Class,
+func (f *DefaultPluginFactory) createPlugin(bundle *plugins.FoundBundle, class plugins.Class,
 	sig plugins.Signature) (*plugins.Plugin, error) {
-	baseURL, err := f.assetPath.Base(p.JSONData, class, p.FS.Base())
+	plugin, err := f.newPlugin(bundle.Primary, class, sig)
 	if err != nil {
-		return nil, fmt.Errorf("base url: %w", err)
-	}
-	moduleURL, err := f.assetPath.Module(p.JSONData, class, p.FS.Base())
-	if err != nil {
-		return nil, fmt.Errorf("module url: %w", err)
-	}
-
-	plugin := &plugins.Plugin{
-		JSONData:      p.JSONData,
-		FS:            p.FS,
-		BaseURL:       baseURL,
-		Module:        moduleURL,
-		Class:         class,
-		Signature:     sig.Status,
-		SignatureType: sig.Type,
-		SignatureOrg:  sig.SigningOrg,
-	}
-	plugin.SetLogger(log.New(fmt.Sprintf("plugin.%s", plugin.ID)))
-
-	if err = setImages(plugin, f.assetPath); err != nil {
 		return nil, err
+	}
+
+	if len(bundle.Children) == 0 {
+		return plugin, nil
+	}
+
+	plugin.Children = make([]*plugins.Plugin, 0, len(bundle.Children))
+	for _, child := range bundle.Children {
+		cp, err := f.newPlugin(*child, class, sig)
+		if err != nil {
+			return nil, err
+		}
+		cp.Parent = plugin
+		plugin.Children = append(plugin.Children, cp)
 	}
 
 	return plugin, nil
 }
 
+func (f *DefaultPluginFactory) newPlugin(p plugins.FoundPlugin, class plugins.Class, sig plugins.Signature) (*plugins.Plugin, error) {
+	info := assetpath.NewPluginInfo(p.JSONData, class, p.FS)
+	baseURL, err := f.assetPath.Base(info)
+	if err != nil {
+		return nil, fmt.Errorf("base url: %w", err)
+	}
+	moduleURL, err := f.assetPath.Module(info)
+	if err != nil {
+		return nil, fmt.Errorf("module url: %w", err)
+	}
+	plugin := &plugins.Plugin{
+		JSONData:      p.JSONData,
+		Class:         class,
+		FS:            p.FS,
+		BaseURL:       baseURL,
+		Module:        moduleURL,
+		Signature:     sig.Status,
+		SignatureType: sig.Type,
+		SignatureOrg:  sig.SigningOrg,
+	}
+
+	plugin.SetLogger(log.New(fmt.Sprintf("plugin.%s", plugin.ID)))
+	if err = setImages(plugin, f.assetPath); err != nil {
+		return nil, err
+	}
+	return plugin, nil
+}
+
 func setImages(p *plugins.Plugin, assetPath *assetpath.Service) error {
+	info := assetpath.NewPluginInfo(p.JSONData, p.Class, p.FS)
 	var err error
 	for _, dst := range []*string{&p.Info.Logos.Small, &p.Info.Logos.Large} {
-		*dst, err = assetPath.RelativeURL(p, *dst, defaultLogoPath(p.Type))
+		if len(*dst) == 0 {
+			*dst = assetPath.DefaultLogoPath(p.Type)
+			continue
+		}
+
+		*dst, err = assetPath.RelativeURL(info, *dst)
 		if err != nil {
 			return fmt.Errorf("logo: %w", err)
 		}
 	}
 	for i := 0; i < len(p.Info.Screenshots); i++ {
 		screenshot := &p.Info.Screenshots[i]
-		screenshot.Path, err = assetPath.RelativeURL(p, screenshot.Path, "")
+		screenshot.Path, err = assetPath.RelativeURL(info, screenshot.Path)
 		if err != nil {
 			return fmt.Errorf("screenshot %d relative url: %w", i, err)
 		}
 	}
 	return nil
-}
-
-func defaultLogoPath(pluginType plugins.Type) string {
-	return fmt.Sprintf("public/img/icn-%s.svg", string(pluginType))
 }

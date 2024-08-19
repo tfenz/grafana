@@ -9,6 +9,7 @@ on:
       - labeled
       - unlabeled
       - edited
+      - auto_merge_enabled
   issues:
     types:
       - milestoned
@@ -30,7 +31,7 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Checkout Actions
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: "grafana/grafana-github-actions"
           path: ./actions

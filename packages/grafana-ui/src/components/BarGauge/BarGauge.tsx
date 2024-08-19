@@ -1,6 +1,7 @@
 // Library
 import { cx } from '@emotion/css';
-import React, { CSSProperties, PureComponent, ReactNode } from 'react';
+import { CSSProperties, PureComponent, ReactNode } from 'react';
+import * as React from 'react';
 import tinycolor from 'tinycolor2';
 
 import {
@@ -20,7 +21,7 @@ import {
   VizOrientation,
 } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
-import { BarGaugeDisplayMode, BarGaugeValueMode, VizTextDisplayOptions } from '@grafana/schema';
+import { BarGaugeDisplayMode, BarGaugeNamePlacement, BarGaugeValueMode, VizTextDisplayOptions } from '@grafana/schema';
 
 import { Themeable2 } from '../../types';
 import { calculateFontSize, measureText } from '../../utils/measureText';
@@ -50,6 +51,7 @@ export interface Props extends Themeable2 {
   showUnfilled?: boolean;
   alignmentFactors?: DisplayValueAlignmentFactors;
   valueDisplayMode?: BarGaugeValueMode;
+  namePlacement?: BarGaugeNamePlacement;
 }
 
 export class BarGauge extends PureComponent<Props> {
@@ -237,7 +239,7 @@ function isVertical(orientation: VizOrientation) {
 }
 
 function calculateTitleDimensions(props: Props): TitleDimensions {
-  const { height, width, alignmentFactors, orientation, text } = props;
+  const { height, width, alignmentFactors, orientation, text, namePlacement } = props;
   const title = alignmentFactors ? alignmentFactors.title : props.value.title;
 
   if (!title) {
@@ -254,8 +256,10 @@ function calculateTitleDimensions(props: Props): TitleDimensions {
     };
   }
 
-  // if height above 40 put text to above bar
-  if (height > 40) {
+  const shouldDisplayValueAbove =
+    (height > 40 && namePlacement === BarGaugeNamePlacement.Auto) || namePlacement === BarGaugeNamePlacement.Top;
+
+  if (shouldDisplayValueAbove) {
     if (text?.titleSize) {
       return {
         fontSize: text?.titleSize,
@@ -654,6 +658,7 @@ function getValueStyles(
     width: `${width}px`,
     display: 'flex',
     alignItems: 'center',
+    textWrap: 'nowrap',
     lineHeight: VALUE_LINE_HEIGHT,
   };
 

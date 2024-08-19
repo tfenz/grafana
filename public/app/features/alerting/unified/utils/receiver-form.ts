@@ -54,7 +54,7 @@ export function cloudReceiverToFormValues(
     // map property names to cloud notifier types by removing the `_config` suffix
     .map(([type, configs]): [CloudNotifierType, CloudChannelConfig[]] => [
       type.replace('_configs', '') as CloudNotifierType,
-      configs as CloudChannelConfig[],
+      configs,
     ])
     // convert channel configs to form values
     .map(([type, configs]) =>
@@ -108,14 +108,14 @@ export function formValuesToCloudReceiver(
   };
   values.items.forEach(({ __id, type, settings, sendResolved }) => {
     const channel = omitEmptyValues({
-      ...settings,
+      ...omitTemporaryIdentifiers(settings),
       send_resolved: sendResolved ?? defaults.sendResolved,
     });
 
     if (!(`${type}_configs` in recv)) {
       recv[`${type}_configs`] = [channel];
     } else {
-      (recv[`${type}_configs`] as unknown[]).push(channel);
+      recv[`${type}_configs`]?.push(channel);
     }
   });
   return recv;
@@ -215,6 +215,10 @@ function grafanaChannelConfigToFormChannelValues(
       delete values.settings[option.propertyName];
       values.secureFields[option.propertyName] = true;
     }
+    if (option.secure && values.settings[option.propertyName]) {
+      values.secureSettings[option.propertyName] = values.settings[option.propertyName];
+      delete values.settings[option.propertyName];
+    }
   });
 
   return values;
@@ -229,7 +233,7 @@ export function formChannelValuesToGrafanaChannelConfig(
 ): GrafanaManagedReceiverConfig {
   const channel: GrafanaManagedReceiverConfig = {
     settings: omitEmptyValues({
-      ...(existing && existing.type === values.type ? existing.settings ?? {} : {}),
+      ...(existing && existing.type === values.type ? (existing.settings ?? {}) : {}),
       ...(values.settings ?? {}),
     }),
     secureSettings: omitEmptyUnlessExisting(values.secureSettings, existing?.secureFields),
@@ -287,4 +291,22 @@ export function omitEmptyValues<T>(obj: T): T {
 // existing is a map of property names that were previously defined.
 export function omitEmptyUnlessExisting(settings = {}, existing = {}): Record<string, unknown> {
   return omitBy(settings, (value, key) => isUnacceptableValue(value) && !(key in existing));
+}
+
+export function omitTemporaryIdentifiers<T>(object: Readonly<T>): T {
+  function omitIdentifiers<T>(obj: T) {
+    if (isArray(obj)) {
+      obj.forEach(omitIdentifiers);
+    } else if (typeof obj === 'object' && obj !== null) {
+      if ('__id' in obj) {
+        delete obj.__id;
+      }
+      Object.values(obj).forEach(omitIdentifiers);
+    }
+  }
+
+  const objectCopy = structuredClone(object);
+  omitIdentifiers(objectCopy);
+
+  return objectCopy;
 }

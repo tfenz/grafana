@@ -1,6 +1,5 @@
 import { Meta, StoryFn } from '@storybook/react';
 import { merge } from 'lodash';
-import React from 'react';
 
 import {
   DataFrame,
@@ -18,7 +17,6 @@ import { Button, Table } from '@grafana/ui';
 import { useTheme2 } from '../../themes';
 import { DashboardStoryCanvas } from '../../utils/storybook/DashboardStoryCanvas';
 import { prepDataForStorybook } from '../../utils/storybook/data';
-import { withCenteredStory } from '../../utils/storybook/withCenteredStory';
 
 import mdx from './Table.mdx';
 import { FooterItem, TableCellDisplayMode, TableCustomCellOptions } from './types';
@@ -26,7 +24,6 @@ import { FooterItem, TableCellDisplayMode, TableCustomCellOptions } from './type
 const meta: Meta<typeof Table> = {
   title: 'Visualizations/Table',
   component: Table,
-  decorators: [withCenteredStory],
   parameters: {
     controls: {
       exclude: ['onColumnResize', 'onSortByChange', 'onCellFilterAdded', 'ariaLabel', 'data', 'initialSortBy'],

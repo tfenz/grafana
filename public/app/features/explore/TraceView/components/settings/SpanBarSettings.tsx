@@ -1,5 +1,4 @@
 import { css } from '@emotion/css';
-import React from 'react';
 
 import {
   DataSourceJsonData,
@@ -8,9 +7,8 @@ import {
   toOption,
   updateDatasourcePluginJsonDataOption,
 } from '@grafana/data';
-import { ConfigSubSection } from '@grafana/experimental';
+import { ConfigDescriptionLink, ConfigSubSection } from '@grafana/experimental';
 import { InlineField, InlineFieldRow, Input, Select, useStyles2 } from '@grafana/ui';
-import { ConfigDescriptionLink } from 'app/core/components/ConfigDescriptionLink';
 
 export interface SpanBarOptions {
   type?: string;
@@ -79,13 +77,16 @@ export default function SpanBarSettings({ options, onOptionsChange }: Props) {
 }
 
 export const SpanBarSection = ({ options, onOptionsChange }: DataSourcePluginOptionsEditorProps) => {
+  let suffix = options.type;
+  suffix += options.type === 'tempo' ? '/configure-tempo-data-source/#span-bar' : '/#span-bar';
+
   return (
     <ConfigSubSection
       title="Span bar"
       description={
         <ConfigDescriptionLink
           description="Add additional info next to the service and operation on a span bar row in the trace view."
-          suffix={`${options.type}/#span-bar`}
+          suffix={suffix}
           feature="the span bar"
         />
       }

@@ -1,8 +1,10 @@
 import { css } from '@emotion/css';
-import React, { memo, useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import AutoSizer from 'react-virtualized-auto-sizer';
 
 import { GrafanaTheme2 } from '@grafana/data';
+import { reportInteraction } from '@grafana/runtime';
 import { FilterInput, useStyles2 } from '@grafana/ui';
 import { Page } from 'app/core/components/Page/Page';
 import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
@@ -38,6 +40,8 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
   const styles = useStyles2(getStyles);
   const [searchState, stateManager] = useSearchStateManager();
   const isSearching = stateManager.hasSearchFilters();
+  const location = useLocation();
+  const search = useMemo(() => new URLSearchParams(location.search), [location.search]);
 
   useEffect(() => {
     stateManager.initStateFromUrl(folderUID);
@@ -50,6 +54,11 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
       })
     );
   }, [dispatch, folderUID, stateManager]);
+
+  // Trigger search when "starred" query param changes
+  useEffect(() => {
+    stateManager.onSetStarred(search.has('starred'));
+  }, [search, stateManager]);
 
   useEffect(() => {
     // Clear the search results when we leave SearchView to prevent old results flashing
@@ -78,9 +87,12 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
 
   const hasSelection = useHasSelection();
 
-  const { canEditInFolder, canCreateDashboards, canCreateFolder } = getFolderPermissions(folderDTO);
+  const { data: rootFolder } = useGetFolderQuery('general');
+  let folder = folderDTO ? folderDTO : rootFolder;
+  const { canEditFolders, canEditDashboards, canCreateDashboards, canCreateFolders } = getFolderPermissions(folder);
 
-  const showEditTitle = canEditInFolder && folderUID;
+  const showEditTitle = canEditFolders && folderUID;
+  const canSelect = canEditFolders || canEditDashboards;
   const onEditTitle = async (newValue: string) => {
     if (folderDTO) {
       const result = await saveFolder({
@@ -88,8 +100,16 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
         title: newValue,
       });
       if ('error' in result) {
+        reportInteraction('grafana_browse_dashboards_page_edit_folder_name', {
+          status: 'failed_with_error',
+          error: result.error,
+        });
         throw result.error;
+      } else {
+        reportInteraction('grafana_browse_dashboards_page_edit_folder_name', { status: 'success' });
       }
+    } else {
+      reportInteraction('grafana_browse_dashboards_page_edit_folder_name', { status: 'failed_no_folderDTO' });
     }
   };
 
@@ -101,33 +121,47 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
       actions={
         <>
           {folderDTO && <FolderActionsButton folder={folderDTO} />}
-          {(canCreateDashboards || canCreateFolder) && (
+          {(canCreateDashboards || canCreateFolders) && (
             <CreateNewButton
               parentFolder={folderDTO}
               canCreateDashboard={canCreateDashboards}
-              canCreateFolder={canCreateFolder}
+              canCreateFolder={canCreateFolders}
             />
           )}
         </>
       }
     >
       <Page.Contents className={styles.pageContents}>
-        <FilterInput
-          placeholder={getSearchPlaceholder(searchState.includePanels)}
-          value={searchState.query}
-          escapeRegex={false}
-          onChange={(e) => stateManager.onQueryChange(e)}
-        />
+        <div>
+          <FilterInput
+            placeholder={getSearchPlaceholder(searchState.includePanels)}
+            value={searchState.query}
+            escapeRegex={false}
+            onChange={(e) => stateManager.onQueryChange(e)}
+          />
+        </div>
 
-        {hasSelection ? <BrowseActions /> : <BrowseFilters />}
+        {hasSelection ? (
+          <BrowseActions />
+        ) : (
+          <div className={styles.filters}>
+            <BrowseFilters />
+          </div>
+        )}
 
         <div className={styles.subView}>
           <AutoSizer>
             {({ width, height }) =>
               isSearching ? (
-                <SearchView canSelect={canEditInFolder} width={width} height={height} />
+                <SearchView
+                  canSelect={canSelect}
+                  width={width}
+                  height={height}
+                  searchState={searchState}
+                  searchStateManager={stateManager}
+                />
               ) : (
-                <BrowseView canSelect={canEditInFolder} width={width} height={height} folderUID={folderUID} />
+                <BrowseView canSelect={canSelect} width={width} height={height} folderUID={folderUID} />
               )
             }
           </AutoSizer>
@@ -139,15 +173,23 @@ const BrowseDashboardsPage = memo(({ match }: Props) => {
 
 const getStyles = (theme: GrafanaTheme2) => ({
   pageContents: css({
-    display: 'grid',
-    gridTemplateRows: 'auto auto 1fr',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(1),
     height: '100%',
-    rowGap: theme.spacing(1),
   }),
 
   // AutoSizer needs an element to measure the full height available
   subView: css({
     height: '100%',
+  }),
+
+  filters: css({
+    display: 'none',
+
+    [theme.breakpoints.up('md')]: {
+      display: 'block',
+    },
   }),
 });
 

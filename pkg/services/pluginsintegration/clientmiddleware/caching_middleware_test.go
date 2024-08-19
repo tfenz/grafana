@@ -27,7 +27,7 @@ func TestCachingMiddleware(t *testing.T) {
 			clienttest.WithMiddlewares(NewCachingMiddleware(cs)),
 		)
 
-		jsonDataMap := map[string]interface{}{}
+		jsonDataMap := map[string]any{}
 		jsonDataBytes, err := json.Marshal(&jsonDataMap)
 		require.NoError(t, err)
 
@@ -202,7 +202,7 @@ func TestCachingMiddleware(t *testing.T) {
 			clienttest.WithResourceResponses([]*backend.CallResourceResponse{simulatedPluginResponse}),
 		)
 
-		jsonDataMap := map[string]interface{}{}
+		jsonDataMap := map[string]any{}
 		jsonDataBytes, err := json.Marshal(&jsonDataMap)
 		require.NoError(t, err)
 
@@ -221,7 +221,7 @@ func TestCachingMiddleware(t *testing.T) {
 		}
 
 		var sentResponse *backend.CallResourceResponse
-		var storeOneResponseCallResourceSender = callResourceResponseSenderFunc(func(res *backend.CallResourceResponse) error {
+		var storeOneResponseCallResourceSender = backend.CallResourceResponseSenderFunc(func(res *backend.CallResourceResponse) error {
 			sentResponse = res
 			return nil
 		})
@@ -279,7 +279,7 @@ func TestCachingMiddleware(t *testing.T) {
 		reqCtx := contexthandler.FromContext(req.Context())
 		require.Nil(t, reqCtx)
 
-		jsonDataMap := map[string]interface{}{}
+		jsonDataMap := map[string]any{}
 		jsonDataBytes, err := json.Marshal(&jsonDataMap)
 		require.NoError(t, err)
 

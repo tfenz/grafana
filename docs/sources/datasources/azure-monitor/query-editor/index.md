@@ -21,12 +21,23 @@ labels:
 menuTitle: Query editor
 title: Azure Monitor query editor
 weight: 300
+refs:
+  query-transform-data-query-options:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/panels-visualizations/query-transform-data/#query-options
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana/<GRAFANA_VERSION>/panels-visualizations/query-transform-data/#query-options
+  query-transform-data:
+    - pattern: /docs/grafana/
+      destination: /docs/grafana/<GRAFANA_VERSION>/panels-visualizations/query-transform-data/
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana/<GRAFANA_VERSION>/panels-visualizations/query-transform-data/
 ---
 
 # Azure Monitor query editor
 
 This topic explains querying specific to the Azure Monitor data source.
-For general documentation on querying data sources in Grafana, see [Query and transform data][query-transform-data].
+For general documentation on querying data sources in Grafana, see [Query and transform data](ref:query-transform-data).
 
 ## Choose a query editing mode
 
@@ -86,17 +97,17 @@ For example:
 - `Blob Type: {{ blobtype }}` becomes `Blob Type: PageBlob`, `Blob Type: BlockBlob`
 - `{{ resourcegroup }} - {{ resourcename }}` becomes `production - web_server`
 
-| Alias pattern                 | Description                                                                                            |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `{{ subscriptionid }}`        | Replaced with the subscription ID.                                                                     |
-| `{{ subscription }}`          | Replaced with the subscription name.                                                                   |
-| `{{ resourcegroup }}`         | Replaced with the the resource group.                                                                  |
-| `{{ namespace }}`             | Replaced with the resource type or namespace, such as `Microsoft.Compute/virtualMachines`.             |
-| `{{ resourcename }}`          | Replaced with the resource name.                                                                       |
-| `{{ metric }}`                | Replaced with the metric name, such as "Percentage CPU".                                               |
-| _`{{ arbitaryDimensionID }}`_ | Replaced with the value of the specified dimension. For example, `{{ blobtype }}` becomes `BlockBlob`. |
-| `{{ dimensionname }}`         | _(Legacy for backward compatibility)_ Replaced with the name of the first dimension.                   |
-| `{{ dimensionvalue }}`        | _(Legacy for backward compatibility)_ Replaced with the value of the first dimension.                  |
+| Alias pattern                  | Description                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `{{ subscriptionid }}`         | Replaced with the subscription ID.                                                                     |
+| `{{ subscription }}`           | Replaced with the subscription name.                                                                   |
+| `{{ resourcegroup }}`          | Replaced with the resource group.                                                                      |
+| `{{ namespace }}`              | Replaced with the resource type or namespace, such as `Microsoft.Compute/virtualMachines`.             |
+| `{{ resourcename }}`           | Replaced with the resource name.                                                                       |
+| `{{ metric }}`                 | Replaced with the metric name, such as "Percentage CPU".                                               |
+| _`{{ arbitraryDimensionID }}`_ | Replaced with the value of the specified dimension. For example, `{{ blobtype }}` becomes `BlockBlob`. |
+| `{{ dimensionname }}`          | _(Legacy for backward compatibility)_ Replaced with the name of the first dimension.                   |
+| `{{ dimensionvalue }}`         | _(Legacy for backward compatibility)_ Replaced with the value of the first dimension.                  |
 
 ### Filter using dimensions
 
@@ -106,7 +117,7 @@ Grafana can display and filter metrics based on dimension values.
 
 The data source supports the `equals`, `not equals`, and `starts with` operators as detailed in the [Monitor Metrics API documentation](https://docs.microsoft.com/en-us/rest/api/monitor/metrics/list).
 
-For more information onmulti-dimensional metrics, refer to the [Azure Monitor data platform metrics documentation](https://docs.microsoft.com/en-us/azure/azure-monitor/essentials/data-platform-metrics#multi-dimensional-metrics) and [Azure Monitor filtering documentation](https://docs.microsoft.com/en-us/azure/azure-monitor/essentials/metrics-charts#filters).
+For more information on multi-dimensional metrics, refer to the [Azure Monitor data platform metrics documentation](https://docs.microsoft.com/en-us/azure/azure-monitor/essentials/data-platform-metrics#multi-dimensional-metrics) and [Azure Monitor filtering documentation](https://docs.microsoft.com/en-us/azure/azure-monitor/essentials/metrics-charts#filters).
 
 ## Query Azure Monitor Logs
 
@@ -147,10 +158,10 @@ The Azure documentation includes resources to help you learn KQL:
 - [SQL to Kusto cheat sheet](https://docs.microsoft.com/en-us/azure/data-explorer/kusto/query/sqlcheatsheet)
 
 > **Time-range:** The time-range that will be used for the query can be modified via the time-range switch. Selecting `Query` will only make use of time-ranges specified within the query.
-> Specifying `Intersection` will make use of the intersection between the time-ranges within the query and the Grafana time-range.
-> If there are no time-ranges specified within the query, the Grafana time-range will be used.
+> Specifying `Dashboard` will only make use of the Grafana time-range.
+> If there are no time-ranges specified within the query, the default Log Analytics time-range will apply.
 > For more details on this change, refer to the [Azure Monitor Logs API documentation](https://learn.microsoft.com/en-us/rest/api/loganalytics/dataaccess/query/get?tabs=HTTP#uri-parameters).
-> Note: v9.4.12, v10.0, and v10.0.1 do not have this switch and will implicitly use the intersection of the Grafana and query time-ranges.
+> If the `Intersection` option was previously chosen it will be migrated by default to `Dashboard`.
 
 This example query returns a virtual machine's CPU performance, averaged over 5ms time grains:
 
@@ -213,7 +224,7 @@ To help you write queries, you can use several Grafana macros in the `where` cla
 | `$__escapeMulti($myVar)`        | Escapes illegal characters in multi-value template variables.<br/>If `$myVar` has the values `'\\grafana-vm\Network(eth0)\Total','\\hello!'` as a string, use this to expand it to `@'\\grafana-vm\Network(eth0)\Total', @'\\hello!'`.<br/><br/>If using single-value variables, escape the variable inline instead: `@'\$myVar'`.                                                                                                                                                              |
 | `$__contains(colName, $myVar)`  | Expands multi-value template variables.<br/>If `$myVar` has the value `'value1','value2'`, use this to expand it to `colName in ('value1','value2')`.<br/><br/>If using the `All` option, check the `Include All Option` checkbox, and type the value `all` in the `Custom all value` field. If `$myVar` has the value `all`, the macro instead expands to `1 == 1`.<br/>For template variables with many options, this avoids building a large "where..in" clause, which improves performance. |
 
-Additionally, Grafana has the built-in [`$__interval` macro][query-transform-data-query-options], which calculates an interval in seconds.
+Additionally, Grafana has the built-in [`$__interval` macro](ref:query-transform-data-query-options), which calculates an interval in seconds.
 
 ## Query Azure Resource Graph
 
@@ -342,11 +353,3 @@ You can also augment queries by using [template variables]({{< relref "./templat
 
 If a request exceeds the [maximum allowed value of records](https://docs.microsoft.com/en-us/azure/governance/resource-graph/concepts/work-with-data#paging-results), the result is paginated and only the first page of results are returned.
 You can use filters to reduce the amount of records returned under that value.
-
-{{% docs/reference %}}
-[query-transform-data-query-options]: "/docs/grafana/ -> /docs/grafana/<GRAFANA VERSION>/panels-visualizations/query-transform-data#query-options"
-[query-transform-data-query-options]: "/docs/grafana-cloud/ -> /docs/grafana/<GRAFANA VERSION>/panels-visualizations/query-transform-data#query-options"
-
-[query-transform-data]: "/docs/grafana/ -> /docs/grafana/<GRAFANA VERSION>/panels-visualizations/query-transform-data"
-[query-transform-data]: "/docs/grafana-cloud/ -> /docs/grafana/<GRAFANA VERSION>/panels-visualizations/query-transform-data"
-{{% /docs/reference %}}

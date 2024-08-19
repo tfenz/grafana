@@ -1,5 +1,3 @@
-import React from 'react';
-
 import { CoreApp, LoadingState, QueryEditorProps, SelectableValue } from '@grafana/data';
 import { EditorHeader, InlineSelect, FlexItem } from '@grafana/experimental';
 import { config } from '@grafana/runtime';
@@ -60,12 +58,16 @@ const QueryHeader = ({
       onChange({ ...query, region });
     }
   };
+  const metricInsightsCrossAccountEnabled = config.featureToggles.cloudwatchMetricInsightsCrossAccount;
 
   const shouldDisplayMonitoringBadge =
     config.featureToggles.cloudWatchCrossAccountQuerying &&
     isMonitoringAccount &&
     (query.queryMode === 'Logs' ||
-      (isCloudWatchMetricsQuery(query) && query.metricQueryType === MetricQueryType.Search));
+      (isCloudWatchMetricsQuery(query) && query.metricQueryType === MetricQueryType.Search) ||
+      (metricInsightsCrossAccountEnabled &&
+        isCloudWatchMetricsQuery(query) &&
+        query.metricQueryType === MetricQueryType.Insights));
 
   return (
     <>
@@ -107,7 +109,7 @@ const QueryHeader = ({
           variant={dataIsStale ? 'primary' : 'secondary'}
           size="sm"
           onClick={onRunQuery}
-          icon={data?.state === LoadingState.Loading ? 'fa fa-spinner' : undefined}
+          icon={data?.state === LoadingState.Loading ? 'spinner' : undefined}
           disabled={data?.state === LoadingState.Loading || emptyLogsExpression}
         >
           Run queries

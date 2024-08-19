@@ -307,7 +307,7 @@ func (e *State) union(aResults, bResults Results, biNode *parse.BinaryNode) []*U
 }
 
 func (e *State) walkBinary(node *parse.BinaryNode) (Results, error) {
-	res := Results{Values{}}
+	res := Results{Values: Values{}}
 	ar, err := e.walk(node.Args[0])
 	if err != nil {
 		return res, err
@@ -558,9 +558,10 @@ func (e *State) biSeriesSeries(labels data.Labels, op string, aSeries, bSeries S
 func (e *State) walkFunc(node *parse.FuncNode) (Results, error) {
 	var res Results
 	var err error
-	var in []reflect.Value
-	for _, a := range node.Args {
-		var v interface{}
+
+	in := make([]reflect.Value, len(node.Args))
+	for i, a := range node.Args {
+		var v any
 		switch t := a.(type) {
 		case *parse.StringNode:
 			v = t.Text
@@ -580,7 +581,8 @@ func (e *State) walkFunc(node *parse.FuncNode) (Results, error) {
 		if err != nil {
 			return res, err
 		}
-		in = append(in, reflect.ValueOf(v))
+
+		in[i] = reflect.ValueOf(v)
 	}
 
 	f := reflect.ValueOf(node.F.F)

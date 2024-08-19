@@ -20,6 +20,8 @@ weight: 50
 Available in [Grafana Enterprise]({{< relref "../../../../introduction/grafana-enterprise/" >}}) and [Grafana Cloud](/docs/grafana-cloud).
 {{% /admonition %}}
 
+{{< table-of-contents >}}
+
 This section includes instructions for how to view permissions associated with roles, create custom roles, and update and delete roles.
 
 The following example includes the base64 username:password Basic Authorization. You cannot use authorization tokens in the request.
@@ -32,6 +34,7 @@ To see the permissions associated with basic roles, refer to the following basic
 
 | Basic role      | UID                   |
 | --------------- | --------------------- |
+| `None`          | `basic_none`          |
 | `Viewer`        | `basic_viewer`        |
 | `Editor`        | `basic_editor`        |
 | `Admin`         | `basic_admin`         |
@@ -103,7 +106,7 @@ Create a custom role when basic roles and fixed roles do not meet your permissio
 
 ### Create custom roles using provisioning
 
-File-based provisioning is one method you can use to create custom roles.
+[File-based provisioning]({{< relref "./rbac-grafana-provisioning" >}}) is one method you can use to create custom roles.
 
 1. Open the YAML configuration file and locate the `roles` section.
 
@@ -257,19 +260,24 @@ If the default basic role definitions do not meet your requirements, you can cha
 
 - Determine the permissions you want to add or remove from a basic role. For more information about the permissions associated with basic roles, refer to [RBAC role definitions]({{< relref "./rbac-fixed-basic-role-definitions/#basic-role-assignments" >}}).
 
+{{% admonition type="note" %}}
+You cannot modify the `No Basic Role` permissions.
+{{% /admonition %}}
+
 **To change permissions from a basic role:**
 
 1. Open the YAML configuration file and locate the `roles` section.
 
 1. Refer to the following table to add attributes and values.
 
-   | Attribute             | Description                                                                                                                               |
-   | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-   | `name`                | The name of the basic role you want to update. You can specify a `uid` instead of a role name. The role `name` or the `uid` are required. |
-   | `orgId`               | Identifies the organization to which the role belongs. `global` can be used instead to specify it's a global role.                        |
-   | `version`             | Identifies the version of the role, which prevents overwriting newer changes.                                                             |
-   | `from`                | List of roles from which to copy permissions.                                                                                             |
-   | `permissions > state` | The state of the permission. You can set it to `absent` to ensure it exclusion from the copy list.                                        |
+   | Attribute             | Description                                                                                                                                               |
+   | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `name`                | The name of the basic role you want to update. You can specify a `uid` instead of a role name. The role `name` or the `uid` are required.                 |
+   | `orgId`               | Identifies the organization to which the role belongs. `global` can be used instead to specify it's a global role.                                        |
+   | `version`             | Identifies the version of the role, which prevents overwriting newer changes.                                                                             |
+   | `overrideRole`        | If set to true, role will be updated regardless of its version in the database. There is no need to specify `version` if `overrideRole` is set to `true`. |
+   | `from`                | List of roles from which to copy permissions.                                                                                                             |
+   | `permissions > state` | The state of the permission. You can set it to `absent` to ensure it exclusion from the copy list.                                                        |
 
 1. Reload the provisioning configuration file.
 

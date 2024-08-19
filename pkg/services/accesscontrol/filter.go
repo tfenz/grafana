@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/grafana/grafana/pkg/services/auth/identity"
+	"github.com/grafana/grafana/pkg/apimachinery/identity"
 )
 
 var sqlIDAcceptList = map[string]struct{}{
@@ -27,7 +27,7 @@ var (
 
 type SQLFilter struct {
 	Where string
-	Args  []interface{}
+	Args  []any
 }
 
 // Filter creates a where clause to restrict the view of a query based on a users permissions
@@ -43,7 +43,7 @@ func Filter(user identity.Requester, sqlID, prefix string, actions ...string) (S
 	}
 
 	wildcards := 0
-	result := make(map[interface{}]int)
+	result := make(map[any]int)
 	for _, a := range actions {
 		ids, hasWildcard := ParseScopes(prefix, user.GetPermissions()[a])
 		if hasWildcard {
@@ -63,7 +63,7 @@ func Filter(user identity.Requester, sqlID, prefix string, actions ...string) (S
 		return allowAllQuery, nil
 	}
 
-	var ids []interface{}
+	var ids []any
 	for id, count := range result {
 		// if an id exist for every action include it in the filter
 		if count+wildcards == len(actions) {
@@ -86,8 +86,8 @@ func Filter(user identity.Requester, sqlID, prefix string, actions ...string) (S
 	return SQLFilter{query.String(), ids}, nil
 }
 
-func ParseScopes(prefix string, scopes []string) (ids map[interface{}]struct{}, hasWildcard bool) {
-	ids = make(map[interface{}]struct{})
+func ParseScopes(prefix string, scopes []string) (ids map[any]struct{}, hasWildcard bool) {
+	ids = make(map[any]struct{})
 
 	parser := parseStringAttribute
 	if strings.HasSuffix(prefix, ":id:") {
@@ -110,11 +110,11 @@ func ParseScopes(prefix string, scopes []string) (ids map[interface{}]struct{}, 
 	return ids, false
 }
 
-func parseIntAttribute(scope string) (interface{}, error) {
+func parseIntAttribute(scope string) (any, error) {
 	return strconv.ParseInt(scope[strings.LastIndex(scope, ":")+1:], 10, 64)
 }
 
-func parseStringAttribute(scope string) (interface{}, error) {
+func parseStringAttribute(scope string) (any, error) {
 	return scope[strings.LastIndex(scope, ":")+1:], nil
 }
 
@@ -127,8 +127,8 @@ func SetAcceptListForTest(list map[string]struct{}) func() {
 	}
 }
 
-func UserRolesFilter(orgID, userID int64, teamIDs []int64, roles []string) (string, []interface{}) {
-	var params []interface{}
+func UserRolesFilter(orgID, userID int64, teamIDs []int64, roles []string) (string, []any) {
+	var params []any
 	builder := strings.Builder{}
 
 	// This is an additional security. We should never have permissions granted to userID 0.
@@ -140,7 +140,7 @@ func UserRolesFilter(orgID, userID int64, teamIDs []int64, roles []string) (stri
 			WHERE ur.user_id = ?
 			AND (ur.org_id = ? OR ur.org_id = ?)
 		`)
-		params = []interface{}{userID, orgID, GlobalOrgID}
+		params = []any{userID, orgID, GlobalOrgID}
 	}
 
 	if len(teamIDs) > 0 {
@@ -176,4 +176,19 @@ func UserRolesFilter(orgID, userID int64, teamIDs []int64, roles []string) (stri
 	}
 
 	return "INNER JOIN (" + builder.String() + ") as all_role ON role.id = all_role.role_id", params
+}
+
+func RolePrefixesFilter(rolePrefixes []string) (string, []any) {
+	query := ""
+	params := make([]any, 0)
+
+	if len(rolePrefixes) > 0 {
+		query += " WHERE ( " + strings.Repeat("role.name LIKE ? OR ", len(rolePrefixes)-1)
+		query += "role.name LIKE ? )"
+		for i := range rolePrefixes {
+			params = append(params, rolePrefixes[i]+"%")
+		}
+	}
+
+	return query, params
 }

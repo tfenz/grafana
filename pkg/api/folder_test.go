@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/folder"
 	"github.com/grafana/grafana/pkg/services/folder/foldertest"
+	"github.com/grafana/grafana/pkg/services/guardian"
 	"github.com/grafana/grafana/pkg/services/quota/quotatest"
 	"github.com/grafana/grafana/pkg/services/search/model"
 	"github.com/grafana/grafana/pkg/services/user"
@@ -46,7 +48,7 @@ func TestFoldersCreateAPIEndpoint(t *testing.T) {
 			description:    "folder creation succeeds given the correct request for creating a folder",
 			input:          folderWithoutParentInput,
 			expectedCode:   http.StatusOK,
-			expectedFolder: &folder.Folder{ID: 1, UID: "uid", Title: "Folder"},
+			expectedFolder: &folder.Folder{UID: "uid", Title: "Folder"},
 			permissions:    []accesscontrol.Permission{{Action: dashboards.ActionFoldersCreate}},
 		},
 		{
@@ -120,9 +122,7 @@ func TestFoldersCreateAPIEndpoint(t *testing.T) {
 		folderPermService.On("SetPermissions", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]accesscontrol.ResourcePermission{}, nil)
 
 		srv := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.Cfg = &setting.Cfg{
-				RBACEnabled: true,
-			}
+			hs.Cfg = setting.NewCfg()
 
 			if tc.withNestedFolders {
 				hs.Features = featuremgmt.WithFeatures(featuremgmt.FlagNestedFolders)
@@ -146,8 +146,7 @@ func TestFoldersCreateAPIEndpoint(t *testing.T) {
 			require.NoError(t, resp.Body.Close())
 
 			if tc.expectedCode == http.StatusOK {
-				assert.Equal(t, int64(1), folder.Id)
-				assert.Equal(t, "uid", folder.Uid)
+				assert.Equal(t, "uid", folder.UID)
 				assert.Equal(t, "Folder", folder.Title)
 			}
 		})
@@ -169,7 +168,7 @@ func TestFoldersUpdateAPIEndpoint(t *testing.T) {
 		{
 			description:    "folder updating succeeds given the correct request and permissions to update a folder",
 			expectedCode:   http.StatusOK,
-			expectedFolder: &folder.Folder{ID: 1, UID: "uid", Title: "Folder upd"},
+			expectedFolder: &folder.Folder{UID: "uid", Title: "Folder upd"},
 			permissions:    []accesscontrol.Permission{{Action: dashboards.ActionFoldersWrite, Scope: dashboards.ScopeFoldersAll}},
 		},
 		{
@@ -232,9 +231,7 @@ func TestFoldersUpdateAPIEndpoint(t *testing.T) {
 		folderService.ExpectedError = tc.expectedFolderSvcError
 
 		srv := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.Cfg = &setting.Cfg{
-				RBACEnabled: true,
-			}
+			hs.Cfg = setting.NewCfg()
 			hs.folderService = folderService
 		})
 
@@ -252,8 +249,7 @@ func TestFoldersUpdateAPIEndpoint(t *testing.T) {
 			require.NoError(t, resp.Body.Close())
 
 			if tc.expectedCode == http.StatusOK {
-				assert.Equal(t, int64(1), folder.Id)
-				assert.Equal(t, "uid", folder.Uid)
+				assert.Equal(t, "uid", folder.UID)
 				assert.Equal(t, "Folder upd", folder.Title)
 			}
 		})
@@ -273,9 +269,7 @@ func TestHTTPServer_FolderMetadata(t *testing.T) {
 	folderService := &foldertest.FakeService{}
 	features := featuremgmt.WithFeatures(featuremgmt.FlagNestedFolders)
 	server := SetupAPITestServer(t, func(hs *HTTPServer) {
-		hs.Cfg = &setting.Cfg{
-			RBACEnabled: true,
-		}
+		hs.Cfg = setting.NewCfg()
 		hs.folderService = folderService
 		hs.QuotaService = quotatest.New(false, nil)
 		hs.SearchService = &mockSearchService{
@@ -289,7 +283,7 @@ func TestHTTPServer_FolderMetadata(t *testing.T) {
 
 		req := server.NewGetRequest("/api/folders/folderUid?accesscontrol=true")
 		webtest.RequestWithSignedInUser(req, &user.SignedInUser{UserID: 1, OrgID: 1, Permissions: map[int64]map[string][]string{
-			1: accesscontrol.GroupScopesByAction([]accesscontrol.Permission{
+			1: accesscontrol.GroupScopesByActionContext(context.Background(), []accesscontrol.Permission{
 				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersAll},
 				{Action: dashboards.ActionFoldersWrite, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("folderUid")},
 			}),
@@ -318,7 +312,7 @@ func TestHTTPServer_FolderMetadata(t *testing.T) {
 
 		req := server.NewGetRequest("/api/folders/folderUid?accesscontrol=true")
 		webtest.RequestWithSignedInUser(req, &user.SignedInUser{UserID: 1, OrgID: 1, Permissions: map[int64]map[string][]string{
-			1: accesscontrol.GroupScopesByAction([]accesscontrol.Permission{
+			1: accesscontrol.GroupScopesByActionContext(context.Background(), []accesscontrol.Permission{
 				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersAll},
 				{Action: dashboards.ActionFoldersWrite, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("parentUid")},
 				{Action: dashboards.ActionDashboardsCreate, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("folderUid")},
@@ -343,7 +337,7 @@ func TestHTTPServer_FolderMetadata(t *testing.T) {
 
 		req := server.NewGetRequest("/api/folders/folderUid")
 		webtest.RequestWithSignedInUser(req, &user.SignedInUser{UserID: 1, OrgID: 1, Permissions: map[int64]map[string][]string{
-			1: accesscontrol.GroupScopesByAction([]accesscontrol.Permission{
+			1: accesscontrol.GroupScopesByActionContext(context.Background(), []accesscontrol.Permission{
 				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersAll},
 				{Action: dashboards.ActionFoldersWrite, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("folderUid")},
 			}),
@@ -404,9 +398,7 @@ func TestFolderMoveAPIEndpoint(t *testing.T) {
 
 	for _, tc := range tcs {
 		srv := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.Cfg = &setting.Cfg{
-				RBACEnabled: true,
-			}
+			hs.Cfg = setting.NewCfg()
 			hs.Features = featuremgmt.WithFeatures(featuremgmt.FlagNestedFolders)
 			hs.folderService = folderService
 		})
@@ -426,7 +418,6 @@ func TestFolderMoveAPIEndpoint(t *testing.T) {
 func TestFolderGetAPIEndpoint(t *testing.T) {
 	folderService := &foldertest.FakeService{
 		ExpectedFolder: &folder.Folder{
-			ID:    1,
 			UID:   "uid",
 			Title: "uid title",
 		},
@@ -441,16 +432,17 @@ func TestFolderGetAPIEndpoint(t *testing.T) {
 			},
 		},
 	}
-	setUpRBACGuardian(t)
 
 	type testCase struct {
 		description          string
 		URL                  string
-		features             *featuremgmt.FeatureManager
+		features             featuremgmt.FeatureToggles
 		expectedCode         int
 		expectedParentUIDs   []string
+		expectedParentOrgIDs []int64
 		expectedParentTitles []string
 		permissions          []accesscontrol.Permission
+		g                    *guardian.FakeDashboardGuardian
 	}
 	tcs := []testCase{
 		{
@@ -459,10 +451,25 @@ func TestFolderGetAPIEndpoint(t *testing.T) {
 			expectedCode:         http.StatusOK,
 			features:             featuremgmt.WithFeatures(featuremgmt.FlagNestedFolders),
 			expectedParentUIDs:   []string{"parent", "subfolder"},
+			expectedParentOrgIDs: []int64{0, 0},
 			expectedParentTitles: []string{"parent title", "subfolder title"},
 			permissions: []accesscontrol.Permission{
 				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("uid")},
 			},
+			g: &guardian.FakeDashboardGuardian{CanViewValue: true},
+		},
+		{
+			description:          "get folder by UID should return parent folders redacted if nested folder are enabled and user does not have read access to parent folders",
+			URL:                  "/api/folders/uid",
+			expectedCode:         http.StatusOK,
+			features:             featuremgmt.WithFeatures(featuremgmt.FlagNestedFolders),
+			expectedParentUIDs:   []string{REDACTED, REDACTED},
+			expectedParentOrgIDs: []int64{0, 0},
+			expectedParentTitles: []string{REDACTED, REDACTED},
+			permissions: []accesscontrol.Permission{
+				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("uid")},
+			},
+			g: &guardian.FakeDashboardGuardian{CanViewValue: false},
 		},
 		{
 			description:          "get folder by UID should not return parent folders if nested folder are disabled",
@@ -470,23 +477,30 @@ func TestFolderGetAPIEndpoint(t *testing.T) {
 			expectedCode:         http.StatusOK,
 			features:             featuremgmt.WithFeatures(),
 			expectedParentUIDs:   []string{},
+			expectedParentOrgIDs: []int64{0, 0},
 			expectedParentTitles: []string{},
 			permissions: []accesscontrol.Permission{
 				{Action: dashboards.ActionFoldersRead, Scope: dashboards.ScopeFoldersProvider.GetResourceScopeUID("uid")},
 			},
+			g: &guardian.FakeDashboardGuardian{CanViewValue: true},
 		},
 	}
 
 	for _, tc := range tcs {
 		srv := SetupAPITestServer(t, func(hs *HTTPServer) {
-			hs.Cfg = &setting.Cfg{
-				RBACEnabled: true,
-			}
+			hs.Cfg = setting.NewCfg()
 			hs.Features = tc.features
 			hs.folderService = folderService
 		})
 
 		t.Run(tc.description, func(t *testing.T) {
+			origNewGuardian := guardian.New
+			t.Cleanup(func() {
+				guardian.New = origNewGuardian
+			})
+
+			guardian.MockDashboardGuardian(tc.g)
+
 			req := srv.NewGetRequest(tc.URL)
 			req = webtest.RequestWithSignedInUser(req, userWithPermissions(1, tc.permissions))
 			resp, err := srv.Send(req)
@@ -501,7 +515,8 @@ func TestFolderGetAPIEndpoint(t *testing.T) {
 			require.Equal(t, len(folder.Parents), len(tc.expectedParentTitles))
 
 			for i := 0; i < len(tc.expectedParentUIDs); i++ {
-				assert.Equal(t, tc.expectedParentUIDs[i], folder.Parents[i].Uid)
+				assert.Equal(t, tc.expectedParentUIDs[i], folder.Parents[i].UID)
+				assert.Equal(t, tc.expectedParentOrgIDs[i], folder.Parents[i].OrgID)
 				assert.Equal(t, tc.expectedParentTitles[i], folder.Parents[i].Title)
 			}
 			require.NoError(t, resp.Body.Close())

@@ -1,12 +1,15 @@
-import { rest } from 'msw';
+import { http, HttpResponse } from 'msw';
 import { setupServer, SetupServer } from 'msw/node';
-import 'whatwg-fetch';
 
 import { DataSourceInstanceSettings } from '@grafana/data';
 import { setBackendSrv } from '@grafana/runtime';
+import { AlertGroupUpdated } from 'app/features/alerting/unified/api/alertRuleApi';
+import allHandlers from 'app/features/alerting/unified/mocks/server/all-handlers';
+import { DashboardDTO, FolderDTO, OrgUser } from 'app/types';
 import {
   PromBuildInfoResponse,
   PromRulesResponse,
+  RulerGrafanaRuleDTO,
   RulerRuleGroupDTO,
   RulerRulesConfigDTO,
 } from 'app/types/unified-alerting-dto';
@@ -17,13 +20,15 @@ import {
   AlertManagerCortexConfig,
   AlertmanagerReceiver,
   EmailConfig,
+  GrafanaManagedReceiverConfig,
   MatcherOperator,
   Route,
 } from '../../../plugins/datasource/alertmanager/types';
+import { DashboardSearchItem } from '../../search/types';
 
-import { AlertingQueryResponse } from './state/AlertingQueryRunner';
+type Configurator<T> = (builder: T) => T;
 
-class AlertmanagerConfigBuilder {
+export class AlertmanagerConfigBuilder {
   private alertmanagerConfig: AlertmanagerConfig = { receivers: [] };
 
   addReceivers(configure: (builder: AlertmanagerReceiverBuilder) => void): AlertmanagerConfigBuilder {
@@ -54,9 +59,11 @@ class AlertmanagerRouteBuilder {
     this.route.receiver = receiver;
     return this;
   }
+
   withoutReceiver(): AlertmanagerRouteBuilder {
     return this;
   }
+
   withEmptyReceiver(): AlertmanagerRouteBuilder {
     this.route.receiver = '';
     return this;
@@ -92,11 +99,46 @@ class EmailConfigBuilder {
   }
 }
 
+class GrafanaReceiverConfigBuilder {
+  private grafanaReceiverConfig: GrafanaManagedReceiverConfig = {
+    name: '',
+    type: '',
+    settings: {},
+    disableResolveMessage: false,
+  };
+
+  withType(type: string): GrafanaReceiverConfigBuilder {
+    this.grafanaReceiverConfig.type = type;
+    return this;
+  }
+
+  withName(name: string): GrafanaReceiverConfigBuilder {
+    this.grafanaReceiverConfig.name = name;
+    return this;
+  }
+
+  addSetting(key: string, value: string): GrafanaReceiverConfigBuilder {
+    if (this.grafanaReceiverConfig.settings) {
+      this.grafanaReceiverConfig.settings[key] = value;
+    }
+    return this;
+  }
+
+  build() {
+    return this.grafanaReceiverConfig;
+  }
+}
+
 class AlertmanagerReceiverBuilder {
-  private receiver: AlertmanagerReceiver = { name: '', email_configs: [] };
+  private receiver: AlertmanagerReceiver = { name: '', email_configs: [], grafana_managed_receiver_configs: [] };
 
   withName(name: string): AlertmanagerReceiverBuilder {
     this.receiver.name = name;
+    return this;
+  }
+
+  addGrafanaReceiverConfig(configure: Configurator<GrafanaReceiverConfigBuilder>): AlertmanagerReceiverBuilder {
+    this.receiver.grafana_managed_receiver_configs?.push(configure(new GrafanaReceiverConfigBuilder()).build());
     return this;
   }
 
@@ -119,23 +161,12 @@ export function mockApi(server: SetupServer) {
       configure(builder);
 
       server.use(
-        rest.get(`api/alertmanager/${amName}/config/api/v1/alerts`, (req, res, ctx) =>
-          res(
-            ctx.status(200),
-            ctx.json<AlertManagerCortexConfig>({
-              alertmanager_config: builder.build(),
-              template_files: {},
-            })
-          )
+        http.get(`api/alertmanager/${amName}/config/api/v1/alerts`, () =>
+          HttpResponse.json<AlertManagerCortexConfig>({
+            alertmanager_config: builder.build(),
+            template_files: {},
+          })
         )
-      );
-    },
-
-    eval: (response: AlertingQueryResponse) => {
-      server.use(
-        rest.post('/api/v1/eval', (_, res, ctx) => {
-          return res(ctx.status(200), ctx.json(response));
-        })
       );
     },
   };
@@ -145,22 +176,22 @@ export function mockAlertRuleApi(server: SetupServer) {
   return {
     prometheusRuleNamespaces: (dsName: string, response: PromRulesResponse) => {
       server.use(
-        rest.get(`api/prometheus/${dsName}/api/v1/rules`, (req, res, ctx) =>
-          res(ctx.status(200), ctx.json<PromRulesResponse>(response))
-        )
+        http.get(`api/prometheus/${dsName}/api/v1/rules`, () => HttpResponse.json<PromRulesResponse>(response))
       );
     },
     rulerRules: (dsName: string, response: RulerRulesConfigDTO) => {
-      server.use(
-        rest.get(`/api/ruler/${dsName}/api/v1/rules`, (req, res, ctx) => res(ctx.status(200), ctx.json(response)))
-      );
+      server.use(http.get(`/api/ruler/${dsName}/api/v1/rules`, () => HttpResponse.json(response)));
+    },
+    updateRule: (dsName: string, response: AlertGroupUpdated) => {
+      server.use(http.post(`/api/ruler/${dsName}/api/v1/rules/:namespaceUid`, () => HttpResponse.json(response)));
     },
     rulerRuleGroup: (dsName: string, namespace: string, group: string, response: RulerRuleGroupDTO) => {
       server.use(
-        rest.get(`/api/ruler/${dsName}/api/v1/rules/${namespace}/${group}`, (req, res, ctx) =>
-          res(ctx.status(200), ctx.json(response))
-        )
+        http.get(`/api/ruler/${dsName}/api/v1/rules/${namespace}/${group}`, () => HttpResponse.json(response))
       );
+    },
+    getAlertRule: (uid: string, response: RulerGrafanaRuleDTO) => {
+      server.use(http.get(`/api/ruler/grafana/api/v1/rule/${uid}`, () => HttpResponse.json(response)));
     },
   };
 }
@@ -176,20 +207,88 @@ export function mockFeatureDiscoveryApi(server: SetupServer) {
      * @param response Use `buildInfoResponse` to get a pre-defined response for Prometheus and Mimir
      */
     discoverDsFeatures: (dsSettings: DataSourceInstanceSettings, response: PromBuildInfoResponse) => {
+      server.use(http.get(`${dsSettings.url}/api/v1/status/buildinfo`, () => HttpResponse.json(response)));
+    },
+  };
+}
+
+export function mockExportApi(server: SetupServer) {
+  // exportRule, exportRulesGroup, exportRulesFolder use the same API endpoint but with different parameters
+  return {
+    // exportRulesGroup requires folderUid and group parameters and doesn't allow ruleUid parameter
+    exportRulesGroup: (folderUid: string, group: string, response: Record<string, string>) => {
       server.use(
-        rest.get(`${dsSettings.url}/api/v1/status/buildinfo`, (_, res, ctx) => res(ctx.status(200), ctx.json(response)))
+        http.get('/api/ruler/grafana/api/v1/export/rules', ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get('folderUid') === folderUid && url.searchParams.get('group') === group) {
+            const format = url.searchParams.get('format') ?? 'yaml';
+            return HttpResponse.text(response[format]);
+          }
+
+          return HttpResponse.text('', { status: 500 });
+        })
+      );
+    },
+    modifiedExport: (namespaceUID: string, response: Record<string, string>) => {
+      server.use(
+        http.post(`/api/ruler/grafana/api/v1/rules/${namespaceUID}/export`, ({ request }) => {
+          const url = new URL(request.url);
+          const format = url.searchParams.get('format') ?? 'yaml';
+          return HttpResponse.text(response[format]);
+        })
       );
     },
   };
 }
 
-// Creates a MSW server and sets up beforeAll, afterAll and beforeEach handlers for it
-export function setupMswServer() {
-  const server = setupServer();
+export function mockFolderApi(server: SetupServer) {
+  return {
+    folder: (folderUid: string, response: FolderDTO) => {
+      server.use(http.get(`/api/folders/${folderUid}`, () => HttpResponse.json(response)));
+    },
+  };
+}
 
+export function mockSearchApi(server: SetupServer) {
+  return {
+    search: (results: DashboardSearchItem[]) => {
+      server.use(http.get(`/api/search`, () => HttpResponse.json(results)));
+    },
+  };
+}
+
+export function mockUserApi(server: SetupServer) {
+  return {
+    user: (user: OrgUser) => {
+      server.use(http.get(`/api/user`, () => HttpResponse.json(user)));
+    },
+  };
+}
+
+export function mockDashboardApi(server: SetupServer) {
+  return {
+    search: (results: DashboardSearchItem[]) => {
+      server.use(http.get(`/api/search`, () => HttpResponse.json(results)));
+    },
+    dashboard: (response: DashboardDTO) => {
+      server.use(http.get(`/api/dashboards/uid/${response.dashboard.uid}`, () => HttpResponse.json(response)));
+    },
+  };
+}
+
+const server = setupServer(...allHandlers);
+
+/**
+ * Sets up beforeAll, afterAll and beforeEach handlers for mock server
+ */
+export function setupMswServer() {
   beforeAll(() => {
     setBackendSrv(backendSrv);
     server.listen({ onUnhandledRequest: 'error' });
+  });
+
+  afterEach(() => {
+    server.resetHandlers();
   });
 
   afterAll(() => {
@@ -198,3 +297,5 @@ export function setupMswServer() {
 
   return server;
 }
+
+export default server;

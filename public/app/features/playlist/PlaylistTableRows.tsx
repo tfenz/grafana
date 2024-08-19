@@ -1,12 +1,13 @@
 import { css } from '@emotion/css';
+import { Draggable } from '@hello-pangea/dnd';
 import pluralize from 'pluralize';
-import React, { ReactNode } from 'react';
-import { Draggable } from 'react-beautiful-dnd';
+import { ReactNode } from 'react';
 
 import { GrafanaTheme2 } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 import { Icon, IconButton, useStyles2, Spinner, IconName } from '@grafana/ui';
 import { TagBadge } from 'app/core/components/TagFilter/TagBadge';
+import { t, Trans } from 'app/core/internationalization';
 
 import { PlaylistItem } from './types';
 
@@ -20,7 +21,9 @@ export const PlaylistTableRows = ({ items, onDelete }: Props) => {
   if (!items?.length) {
     return (
       <div>
-        <em>Playlist is empty. Add dashboards below.</em>
+        <em>
+          <Trans i18nKey="playlist-edit.form.table-empty">Playlist is empty. Add dashboards below.</Trans>
+        </em>
       </div>
     );
   }
@@ -80,9 +83,14 @@ export const PlaylistTableRows = ({ items, onDelete }: Props) => {
                   name="times"
                   size="md"
                   onClick={() => onDelete(index)}
-                  tooltip={selectors.pages.PlaylistForm.itemDelete}
+                  data-testid={selectors.pages.PlaylistForm.itemDelete}
+                  tooltip={t('playlist-edit.form.table-delete', 'Delete playlist item')}
                 />
-                <Icon title="Drag and drop to reorder" name="draggabledots" size="md" />
+                <Icon
+                  title={t('playlist-edit.form.table-drag', 'Drag and drop to reorder')}
+                  name="draggabledots"
+                  size="md"
+                />
               </div>
             </div>
           )}
